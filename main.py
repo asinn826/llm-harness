@@ -58,17 +58,26 @@ def make_model_fn(tokenizer, model, system_prompt: str):
                 add_generation_prompt=True,
             ).to(model.device)
         else:
-            text = "\n".join(f"{m['role'].upper()}: {m['content']}" for m in messages)
+            lines = []
+            for m in messages:
+                if m["role"] == "tool":
+                    # In fallback mode, present tool results as user context
+                    lines.append(f"USER: [Tool result] {m['content']}")
+                else:
+                    lines.append(f"{m['role'].upper()}: {m['content']}")
+            text = "\n".join(lines)
             text += "\nASSISTANT:"
             input_ids = tokenizer(text, return_tensors="pt").input_ids.to(model.device)
 
-        with torch.no_grad():
-            output = model.generate(
-                input_ids,
-                max_new_tokens=512,
-                do_sample=False,
-                pad_token_id=tokenizer.eos_token_id,
-            )
+        # Spinner only wraps generation — NOT confirmation prompts
+        with thinking_spinner():
+            with torch.no_grad():
+                output = model.generate(
+                    input_ids,
+                    max_new_tokens=512,
+                    do_sample=False,
+                    pad_token_id=tokenizer.eos_token_id,
+                )
 
         # Slice off the input tokens — we only want the newly generated ones
         new_tokens = output[0][input_ids.shape[-1]:]
@@ -99,14 +108,14 @@ def main():
             console.print("\n[dim]Goodbye.[/dim]")
             break
 
-        with thinking_spinner():
-            response = run_conversation_turn(
-                user_input,
-                conversation,
-                model_fn,
-                TOOLS,
-                confirm_fn=confirm_tool,
-            )
+        response = run_conversation_turn(
+            user_input,
+            conversation,
+            model_fn,
+            TOOLS,
+            confirm_fn=confirm_tool,
+            result_fn=print_tool_result,
+        )
 
         print_assistant(response)
 

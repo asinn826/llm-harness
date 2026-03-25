@@ -65,19 +65,22 @@ def parse_tool_call(response: str) -> Optional[dict]:
     text = re.sub(r"```(?:json)?\s*(.*?)\s*```", r"\1", response, flags=re.DOTALL).strip()
     try:
         data = json.loads(text)
-        if isinstance(data, dict) and "tool" in data:
+        if isinstance(data, dict) and isinstance(data.get("tool"), str):
             return data
     except (json.JSONDecodeError, ValueError):
         pass
     return None
 
 
-def confirm_and_run(tool_call: dict, tools: dict, confirm_fn=None) -> str:
+def confirm_and_run(tool_call: dict, tools: dict, confirm_fn=None, result_fn=None) -> str:
     """Ask user to confirm, then run the tool. Returns the result as a string.
 
     confirm_fn: callable(tool_name: str, args: dict) -> bool
       If None, falls back to a plain input() prompt (useful outside a rich CLI).
       The CLI passes cli.confirm_tool here; tests pass a lambda.
+
+    result_fn: callable(result: str) -> None — called after the tool runs, for display.
+      If None, the result is returned but not displayed.
 
     Keeping confirm_fn injectable is what makes this function testable without
     any terminal interaction.
@@ -98,9 +101,14 @@ def confirm_and_run(tool_call: dict, tools: dict, confirm_fn=None) -> str:
         return "Tool call denied by user."
 
     try:
-        return str(tools[tool_name](**args))
+        result = str(tools[tool_name](**args))
     except Exception as e:
-        return f"Error running tool: {e}"
+        result = f"Error running tool: {e}"
+
+    if result_fn is not None:
+        result_fn(result)
+
+    return result
 
 
 def run_conversation_turn(
@@ -109,6 +117,7 @@ def run_conversation_turn(
     model_fn,
     tools: dict,
     confirm_fn=None,
+    result_fn=None,
     max_iterations: int = 10,
 ) -> str:
     """Run one full conversation turn and return the final assistant response.
@@ -139,7 +148,9 @@ def run_conversation_turn(
 
         # Tool call — confirm, run, inject result, loop again
         conversation.append({"role": "assistant", "content": response})
-        result = confirm_and_run(tool_call, tools, confirm_fn=confirm_fn)
+        result = confirm_and_run(tool_call, tools, confirm_fn=confirm_fn, result_fn=result_fn)
         conversation.append({"role": "tool", "content": result})
 
-    return "Reached maximum tool call iterations."
+    fallback = "Reached maximum tool call iterations."
+    conversation.append({"role": "assistant", "content": fallback})
+    return fallback

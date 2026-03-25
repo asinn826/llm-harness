@@ -109,3 +109,5 @@ def test_run_conversation_turn_max_iterations():
 
     result = run_conversation_turn("loop forever", conversation, model_fn, TOOLS, confirm_fn=confirm_fn, max_iterations=3)
     assert "maximum" in result.lower()
+    # conversation should end with an assistant message, not a dangling tool result
+    assert conversation[-1]["role"] == "assistant"
