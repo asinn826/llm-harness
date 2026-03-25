@@ -49,9 +49,19 @@ Available tools:
 {tool_descriptions}
 
 IMPORTANT rules:
-- Only use a tool when the user's request genuinely requires external information or an action (e.g. running a command, reading a file, doing math, searching the web).
-- For greetings, general questions, or anything you can answer from your own knowledge, respond in plain text — do NOT call a tool.
-- Only call one tool at a time. Wait for the result before calling another."""
+- Only use a tool when the request requires external information or an action you cannot answer from memory.
+- For greetings, chitchat, or questions you already know the answer to, respond in plain text — do NOT call a tool.
+- Only call one tool at a time. Wait for the result before calling another.
+
+Examples of when NOT to use a tool (respond in plain text):
+- "hello" → "Hello! How can I help you?"
+- "what is Python?" → explain Python in plain text
+- "thanks" → "You're welcome!"
+
+Examples of when to use a tool:
+- "what files are in this folder?" → {{"tool": "run_shell", "args": {{"command": "ls"}}}}
+- "what is 123 * 456?" → {{"tool": "calculator", "args": {{"expression": "123 * 456"}}}}
+- "search for the latest Python release" → {{"tool": "web_search", "args": {{"query": "latest Python release"}}}}"""
 
 
 def parse_tool_call(response: str) -> Optional[dict]:
