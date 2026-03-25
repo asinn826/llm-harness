@@ -48,8 +48,10 @@ To use a tool, respond with ONLY a JSON object in this exact format:
 Available tools:
 {tool_descriptions}
 
-If you don't need a tool, just respond normally in plain text.
-Only call one tool at a time. Wait for the result before calling another."""
+IMPORTANT rules:
+- Only use a tool when the user's request genuinely requires external information or an action (e.g. running a command, reading a file, doing math, searching the web).
+- For greetings, general questions, or anything you can answer from your own knowledge, respond in plain text — do NOT call a tool.
+- Only call one tool at a time. Wait for the result before calling another."""
 
 
 def parse_tool_call(response: str) -> Optional[dict]:
