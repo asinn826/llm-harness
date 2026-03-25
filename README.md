@@ -1,6 +1,8 @@
 # llm-harness
 
-> Built for learning. A minimal tool-use loop around a local HuggingFace model — to understand how agents like Claude Code work under the hood.
+> Built for learning. A minimal tool-use loop around a local HuggingFace model — to understand how agents might work under the hood.
+
+> "We have claude code at home"
 
 ## Run
 
