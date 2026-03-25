@@ -122,7 +122,9 @@ def run_conversation_turn(
       Any callable that takes a conversation and returns a string.
       Could be a HuggingFace model, an API call, or a test stub.
 
-    The conversation list is mutated in place so the caller can inspect history.
+    The conversation list is mutated in place — user_message is appended at the
+    start of this call, so don't add it yourself beforehand. The full history
+    (including intermediate tool calls and results) is in conversation after the call.
     """
     conversation.append({"role": "user", "content": user_message})
 
