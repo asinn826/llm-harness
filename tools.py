@@ -8,26 +8,31 @@ To add a new tool:
   2. Add it to the TOOLS dict at the bottom of this file
   That's it.
 """
+import ast
 import subprocess
 import requests
 
 
 def run_shell(command: str) -> str:
-    """Run a shell command and return stdout+stderr. Args: command (str)."""
+    """Run a shell command and return stdout+stderr. Args: command (str). Returns: stdout+stderr as a single string, or "(no output)" if empty."""
+    # shell=True passes the command directly to the shell — intentional for flexibility,
+    # but means a malicious or confused model could run arbitrary commands. In production,
+    # you'd want a command allowlist or a sandboxed environment.
     result = subprocess.run(command, shell=True, capture_output=True, text=True, timeout=30)
     return (result.stdout + result.stderr).strip() or "(no output)"
 
 
 def read_file(path: str) -> str:
-    """Read a file and return its contents. Args: path (str)."""
+    """Read a file and return its contents. Args: path (str). Returns: file contents as a string, or "Error: <message>" on failure."""
     try:
-        return open(path).read()
+        with open(path) as f:
+            return f.read()
     except Exception as e:
         return f"Error: {e}"
 
 
 def write_file(path: str, content: str) -> str:
-    """Write content to a file. Args: path (str), content (str)."""
+    """Write content to a file. Args: path (str), content (str). Returns: "OK" on success, or "Error: <message>" on failure."""
     try:
         with open(path, "w") as f:
             f.write(content)
@@ -37,18 +42,25 @@ def write_file(path: str, content: str) -> str:
 
 
 def calculator(expression: str) -> str:
-    """Evaluate a math expression. Args: expression (str)."""
-    allowed = set("0123456789+-*/(). ")
-    if not all(c in allowed for c in expression):
-        return "Error: only basic math expressions allowed"
+    """Evaluate a math expression safely using AST validation. Args: expression (str). Returns: result as a string, or "Error: <message>" on failure."""
+    # Validate the AST before eval — only allow number literals and basic operators.
+    # This is safer than a character allowlist, and shows how to think about eval safety.
+    SAFE_NODES = (
+        ast.Expression, ast.BinOp, ast.UnaryOp, ast.Constant,
+        ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Pow, ast.Mod,
+        ast.FloorDiv, ast.UAdd, ast.USub,
+    )
     try:
-        return str(eval(expression))
+        tree = ast.parse(expression, mode="eval")
+        if not all(isinstance(node, SAFE_NODES) for node in ast.walk(tree)):
+            return "Error: only basic math expressions allowed"
+        return str(eval(compile(tree, "<string>", "eval")))
     except Exception as e:
         return f"Error: {e}"
 
 
 def web_search(query: str) -> str:
-    """Search the web using DuckDuckGo and return results. Args: query (str)."""
+    """Search the web using DuckDuckGo and return results. Args: query (str). Returns: newline-joined results (abstract + related topics), "No results found.", or "Error: <message>"."""
     try:
         resp = requests.get(
             "https://api.duckduckgo.com/",
