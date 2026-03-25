@@ -10,8 +10,13 @@ For example: replace cli.py with a FastAPI server to get a web interface, or swa
 the HuggingFace model for an API call — the harness and tools don't change at all.
 """
 import argparse
-from transformers import AutoTokenizer, AutoModelForCausalLM
+import logging
+from transformers import AutoTokenizer, AutoModelForCausalLM, logging as hf_logging
 import torch
+
+# Suppress noisy but harmless transformers warnings about generation flags
+hf_logging.set_verbosity_error()
+logging.getLogger("transformers").setLevel(logging.ERROR)
 from harness import build_system_prompt, run_conversation_turn
 from tools import TOOLS
 from cli import (
@@ -69,11 +74,15 @@ def make_model_fn(tokenizer, model, system_prompt: str):
             text += "\nASSISTANT:"
             input_ids = tokenizer(text, return_tensors="pt").input_ids.to(model.device)
 
+        # Build attention mask explicitly to avoid the pad==eos warning
+        attention_mask = torch.ones_like(input_ids)
+
         # Spinner only wraps generation — NOT confirmation prompts
         with thinking_spinner():
             with torch.no_grad():
                 output = model.generate(
                     input_ids,
+                    attention_mask=attention_mask,
                     max_new_tokens=512,
                     do_sample=False,
                     pad_token_id=tokenizer.eos_token_id,
