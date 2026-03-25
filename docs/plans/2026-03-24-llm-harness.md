@@ -2,11 +2,11 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Build a simple Python LLM harness using HuggingFace transformers that supports tool use with user confirmation.
+**Goal:** Build a minimal but complete LLM harness that lets developers accomplish real tasks through a polished CLI, while being simple enough to read top-to-bottom in an afternoon and understand exactly how it works. The "aha" moment: reading the generation loop and thinking "this is basically what Claude Code is doing."
 
-**Architecture:** Tools are defined as Python functions whose signatures are serialized into the system prompt as JSON schemas. The model outputs JSON tool calls; the harness parses them, confirms with the user, runs them, and injects results back into the conversation until the model produces a plain text response.
+**Architecture:** Tools are defined as Python functions whose signatures are serialized into the system prompt as JSON schemas. The model outputs JSON tool calls; the harness parses them, confirms with the user, runs them, and injects results back into the conversation until the model produces a plain text response. A dedicated `cli.py` handles all presentation (colors, spinners, confirmations) separately from harness logic.
 
-**Tech Stack:** Python 3.10+, `transformers`, `torch`, `requests`, `pytest`
+**Tech Stack:** Python 3.10+, `transformers`, `torch`, `requests`, `rich`, `pytest`
 
 ---
 
@@ -16,6 +16,7 @@
 - Create: `main.py`
 - Create: `harness.py`
 - Create: `tools.py`
+- Create: `cli.py`
 - Create: `requirements.txt`
 - Create: `tests/test_tools.py`
 - Create: `tests/test_harness.py`
@@ -26,12 +27,13 @@
 transformers>=4.40
 torch>=2.2
 requests>=2.31
+rich>=13.0
 pytest>=8.0
 ```
 
 **Step 2: Create empty module files**
 
-Create `tools.py`, `harness.py`, `main.py` with just a module docstring each:
+Create `tools.py`, `harness.py`, `cli.py`, `main.py` with just a module docstring each:
 
 ```python
 """Tools available to the LLM harness."""
@@ -39,6 +41,10 @@ Create `tools.py`, `harness.py`, `main.py` with just a module docstring each:
 
 ```python
 """LLM harness: generation loop and tool call handling."""
+```
+
+```python
+"""CLI presentation: colors, spinners, confirmations, and startup banner."""
 ```
 
 ```python
@@ -383,7 +389,151 @@ git commit -m "feat: implement harness logic with tests"
 
 ---
 
-### Task 4: Implement main.py (model loading + CLI)
+### Task 4: Implement cli.py (polished CLI presentation)
+
+**Files:**
+- Modify: `cli.py`
+
+No unit tests — visual output. Manual verification instead.
+
+**Step 1: Implement cli.py**
+
+```python
+"""CLI presentation: colors, spinners, confirmations, and startup banner.
+
+This module owns everything the user sees. Harness logic lives in harness.py —
+keeping presentation separate means you can swap out the CLI for an API or web
+interface without touching any core logic.
+"""
+from rich.console import Console
+from rich.panel import Panel
+from rich.prompt import Prompt, Confirm
+from rich.spinner import Spinner
+from rich.live import Live
+from rich.text import Text
+from rich import print as rprint
+
+console = Console()
+
+BANNER = """[bold cyan]LLM Harness[/bold cyan] — a minimal agent loop
+
+How it works:
+  1. Your message is added to a conversation list
+  2. The model generates a response
+  3. If the response is a JSON tool call, the harness runs it and feeds the result back
+  4. This repeats until the model responds in plain text
+  5. That's it — this is what Claude Code does too, just with more tools
+
+Type [bold]quit[/bold] to exit.
+"""
+
+
+def print_banner():
+    """Print the startup banner explaining how the harness works."""
+    console.print(Panel(BANNER, border_style="cyan"))
+
+
+def print_user(message: str):
+    """Display the user's message."""
+    console.print(f"\n[bold green]You:[/bold green] {message}")
+
+
+def print_assistant(message: str):
+    """Display the assistant's final response."""
+    console.print(f"\n[bold blue]Assistant:[/bold blue] {message}\n")
+
+
+def print_tool_call(tool_name: str, args: dict):
+    """Display an incoming tool call request."""
+    args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items())
+    console.print(f"\n[bold yellow]⚙ Tool call:[/bold yellow] [cyan]{tool_name}[/cyan]({args_str})")
+
+
+def print_tool_result(result: str):
+    """Display the result returned by a tool."""
+    # Truncate long results for readability
+    display = result if len(result) < 500 else result[:500] + "\n[dim]... (truncated)[/dim]"
+    console.print(f"[dim]  → {display}[/dim]")
+
+
+def confirm_tool(tool_name: str, args: dict) -> bool:
+    """Ask the user whether to run a tool. Returns True if approved."""
+    print_tool_call(tool_name, args)
+    return Confirm.ask("  Run this?", default=True)
+
+
+def get_user_input() -> str:
+    """Get input from the user. Returns empty string on EOF."""
+    try:
+        return Prompt.ask("\n[bold green]You[/bold green]").strip()
+    except (EOFError, KeyboardInterrupt):
+        return ""
+
+
+def thinking_spinner(label: str = "Thinking..."):
+    """Return a Live context manager showing a spinner while the model generates."""
+    return Live(Spinner("dots", text=f"[dim]{label}[/dim]"), console=console, transient=True)
+```
+
+**Step 2: Update confirm_and_run in harness.py to accept a confirm_fn**
+
+The harness should not import from `cli.py` directly — instead, `confirm_and_run` should accept a `confirm_fn` callable so it stays testable and presentation-agnostic:
+
+```python
+def confirm_and_run(tool_call: dict, tools: dict, confirm_fn=None) -> str:
+    """Ask user to confirm, then run the tool. Returns the result string.
+
+    confirm_fn: callable(tool_name, args) -> bool. Defaults to a plain input() prompt.
+    """
+    tool_name = tool_call.get("tool")
+    args = tool_call.get("args", {})
+
+    if tool_name not in tools:
+        return f"Error: unknown tool '{tool_name}'"
+
+    if confirm_fn is None:
+        # Fallback for testing / non-CLI use
+        print(f"[Tool call] {tool_name}({args})")
+        answer = input("Run this? [y/n]: ").strip().lower()
+        approved = answer == "y"
+    else:
+        approved = confirm_fn(tool_name, args)
+
+    if not approved:
+        return "Tool call denied by user."
+
+    try:
+        return str(tools[tool_name](**args))
+    except Exception as e:
+        return f"Error running tool: {e}"
+```
+
+Also update `run_conversation_turn` signature to pass `confirm_fn` through:
+
+```python
+def run_conversation_turn(user_message, conversation, model_fn, tools, confirm_fn=None, max_iterations=10):
+    ...
+    result = confirm_and_run(tool_call, tools, confirm_fn=confirm_fn)
+    ...
+```
+
+**Step 3: Verify manually**
+
+```bash
+python -c "from cli import print_banner; print_banner()"
+```
+Expected: colored banner printed to terminal.
+
+**Step 4: Commit**
+
+```bash
+git add cli.py harness.py
+git commit -m "feat: add rich CLI presentation layer"
+```
+
+---
+
+### Task 5: Implement main.py (model loading + CLI)
 
 **Files:**
 - Modify: `main.py`
@@ -393,32 +543,49 @@ No unit tests for this task — it requires a real model. Manual testing instead
 **Step 1: Implement main.py**
 
 ```python
-"""Entry point: load model and start CLI loop."""
+"""Entry point: load model and start CLI loop.
+
+This file wires together three independent pieces:
+  - tools.py    : what the model can do
+  - harness.py  : the generation + tool-call loop
+  - cli.py      : what the user sees
+
+Keeping them separate means you can swap any one piece without touching the others.
+For example: replace cli.py with a FastAPI server to get a web interface.
+"""
 import argparse
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 from harness import build_system_prompt, run_conversation_turn
 from tools import TOOLS
+from cli import (
+    console, print_banner, print_assistant, print_tool_result,
+    confirm_tool, get_user_input, thinking_spinner
+)
 
 
 def load_model(model_id: str):
-    print(f"Loading {model_id}...")
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
-    model = AutoModelForCausalLM.from_pretrained(
-        model_id,
-        torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-        device_map="auto",
-    )
-    model.eval()
-    print("Model loaded.")
+    """Load a HuggingFace model and tokenizer onto the best available device."""
+    with thinking_spinner(f"Loading {model_id}..."):
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        model = AutoModelForCausalLM.from_pretrained(
+            model_id,
+            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
+            device_map="auto",
+        )
+        model.eval()
+    console.print(f"[dim]✓ Model loaded ({model_id})[/dim]\n")
     return tokenizer, model
 
 
 def make_model_fn(tokenizer, model, system_prompt: str):
-    """Return a callable that takes a conversation list and returns a string response."""
+    """Return a callable(conversation) -> str that runs one generation step.
+
+    The harness calls this in a loop. Keeping it as a plain callable means the
+    harness doesn't need to know anything about HuggingFace internals.
+    """
     def model_fn(conversation: list) -> str:
         messages = [{"role": "system", "content": system_prompt}] + conversation
-        # Use apply_chat_template if available, else format manually
         if hasattr(tokenizer, "apply_chat_template"):
             input_ids = tokenizer.apply_chat_template(
                 messages,
@@ -444,28 +611,38 @@ def make_model_fn(tokenizer, model, system_prompt: str):
     return model_fn
 
 
+def on_tool_result(result: str):
+    """Callback invoked by the harness after a tool runs — we print the result."""
+    print_tool_result(result)
+
+
 def main():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(description="A minimal LLM harness with tool use")
     parser.add_argument("--model", default="Qwen/Qwen2.5-0.5B-Instruct", help="HuggingFace model ID")
     args = parser.parse_args()
 
+    print_banner()
     tokenizer, model = load_model(args.model)
     system_prompt = build_system_prompt(TOOLS)
     model_fn = make_model_fn(tokenizer, model, system_prompt)
     conversation = []
 
-    print("\nLLM Harness ready. Type 'quit' to exit.\n")
     while True:
-        try:
-            user_input = input("You: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nGoodbye.")
-            break
+        user_input = get_user_input()
         if not user_input or user_input.lower() == "quit":
+            console.print("\n[dim]Goodbye.[/dim]")
             break
 
-        response = run_conversation_turn(user_input, conversation, model_fn, TOOLS)
-        print(f"\nAssistant: {response}\n")
+        with thinking_spinner():
+            response = run_conversation_turn(
+                user_input,
+                conversation,
+                model_fn,
+                TOOLS,
+                confirm_fn=confirm_tool,
+            )
+
+        print_assistant(response)
 
 
 if __name__ == "__main__":
@@ -492,7 +669,7 @@ git commit -m "feat: implement model loading and CLI entry point"
 
 ---
 
-### Task 5: Run full test suite and clean up
+### Task 6: Run full test suite and clean up
 
 **Step 1: Run all tests**
 
@@ -506,6 +683,12 @@ Expected: all PASS
 ```bash
 python main.py --model Qwen/Qwen2.5-0.5B-Instruct
 ```
+Check:
+- Banner prints with architecture explanation
+- Spinner appears while model loads and generates
+- Tool calls show in yellow with confirmation prompt
+- Tool results show dimmed below the call
+- Assistant response shows in blue
 
 **Step 3: Final commit**
 

@@ -2,7 +2,19 @@
 
 **Date:** 2026-03-24
 
-## Goal
+## Product Goal
+
+> A minimal but complete LLM harness that lets developers accomplish real tasks through a polished CLI, while being simple enough to read top-to-bottom in an afternoon and understand exactly how it works.
+
+**Success looks like:**
+- A developer uses it to do something genuinely useful (run a shell command, search the web, read/write files) and thinks *"I could build on this"*
+- The code is short enough that they can trace a single request from `input()` through tool use back to the response — and see it's not magic
+- The CLI feels real: colored output, visible tool confirmations, a sense of responsiveness
+- Adding a new tool is one function + one line in a registry — no framework knowledge required
+
+**The "aha" moment:** Reading the generation loop and thinking *"wait, this is basically what Claude Code is doing"*
+
+## Technical Goal
 
 Build a simple LLM harness using HuggingFace transformers to understand how tool use works end-to-end. Educational focus — every step should be explicit and visible.
 
@@ -32,9 +44,15 @@ Three layers:
 - `confirm_and_run(tool_call)` — prints the call, asks `[y/n]`, runs if approved
 - `chat(user_message)` — main loop: appends message, generates, handles tool calls until final answer
 
+### `cli.py`
+- Colored output via `rich` (user input, assistant response, tool calls each styled differently)
+- Visible tool confirmation prompt with tool name + args displayed clearly
+- Spinner while model is generating
+- Prints a brief "how this works" header on startup so developers immediately see the architecture
+
 ### `main.py`
 - Loads model + tokenizer from HuggingFace
-- Starts the CLI input loop
+- Wires together cli + harness + tools and starts the loop
 
 ## Data Flow
 
