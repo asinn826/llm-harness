@@ -11,6 +11,8 @@ the HuggingFace model for an API call — the harness and tools don't change at 
 """
 import argparse
 import logging
+from dotenv import load_dotenv
+load_dotenv()
 from transformers import AutoTokenizer, AutoModelForCausalLM, logging as hf_logging
 import torch
 
@@ -28,18 +30,27 @@ from cli import (
 def load_model(model_id: str):
     """Load a HuggingFace model and tokenizer onto the best available device.
 
-    Uses float16 on CUDA for speed, float32 on CPU (float16 causes numerical
+    Uses float16 on CUDA/MPS for speed, float32 on CPU (float16 causes numerical
     issues on some CPU implementations).
     """
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        dtype = torch.float16
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+        dtype = torch.float16
+    else:
+        device = torch.device("cpu")
+        dtype = torch.float32
+
     with thinking_spinner(f"Loading {model_id}..."):
         tokenizer = AutoTokenizer.from_pretrained(model_id)
         model = AutoModelForCausalLM.from_pretrained(
             model_id,
-            torch_dtype=torch.float16 if torch.cuda.is_available() else torch.float32,
-            device_map="auto",
-        )
+            torch_dtype=dtype,
+        ).to(device)
         model.eval()
-    console.print(f"[dim]✓ Model loaded ({model_id})[/dim]\n")
+    console.print(f"[dim]✓ Model loaded ({model_id}) on {device}[/dim]\n")
     return tokenizer, model
 
 

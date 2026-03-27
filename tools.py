@@ -9,6 +9,7 @@ To add a new tool:
   That's it.
 """
 import ast
+import os
 import subprocess
 import requests
 
@@ -60,21 +61,21 @@ def calculator(expression: str) -> str:
 
 
 def web_search(query: str) -> str:
-    """Search the web using DuckDuckGo and return results. Args: query (str). Returns: newline-joined results (abstract + related topics), "No results found.", or "Error: <message>"."""
+    """Search the web using Tavily and return results. Args: query (str). Returns: newline-joined results (title + content snippet per result), "No results found.", or "Error: <message>"."""
+    api_key = os.environ.get("TAVILY_API_KEY")
+    if not api_key:
+        return "Error: TAVILY_API_KEY environment variable not set"
     try:
-        resp = requests.get(
-            "https://api.duckduckgo.com/",
-            params={"q": query, "format": "json", "no_redirect": 1},
+        resp = requests.post(
+            "https://api.tavily.com/search",
+            json={"api_key": api_key, "query": query, "max_results": 3},
             timeout=10,
         )
         data = resp.json()
         results = []
-        if data.get("AbstractText"):
-            results.append(data["AbstractText"])
-        for r in data.get("RelatedTopics", [])[:3]:
-            if isinstance(r, dict) and r.get("Text"):
-                results.append(r["Text"])
-        return "\n".join(results) if results else "No results found."
+        for r in data.get("results", []):
+            results.append(f"{r['title']}\n{r['content']}")
+        return "\n\n".join(results) if results else "No results found."
     except Exception as e:
         return f"Error: {e}"
 

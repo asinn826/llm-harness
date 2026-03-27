@@ -42,19 +42,26 @@ def test_calculator_division_by_zero():
 def test_web_search_returns_results():
     mock_response = MagicMock()
     mock_response.json.return_value = {
-        "AbstractText": "Paris is the capital of France.",
-        "RelatedTopics": [
-            {"Text": "France is a country in Western Europe."},
+        "results": [
+            {"title": "Paris", "content": "Paris is the capital of France."},
+            {"title": "France", "content": "France is a country in Western Europe."},
         ]
     }
-    with patch("tools.requests.get", return_value=mock_response):
-        result = web_search("capital of France")
+    with patch("tools.requests.post", return_value=mock_response):
+        with patch.dict("os.environ", {"TAVILY_API_KEY": "test-key"}):
+            result = web_search("capital of France")
     assert "Paris" in result
 
 def test_web_search_handles_error():
-    with patch("tools.requests.get", side_effect=Exception("network error")):
-        result = web_search("anything")
+    with patch("tools.requests.post", side_effect=Exception("network error")):
+        with patch.dict("os.environ", {"TAVILY_API_KEY": "test-key"}):
+            result = web_search("anything")
     assert "Error" in result
+
+def test_web_search_missing_api_key():
+    with patch.dict("os.environ", {}, clear=True):
+        result = web_search("anything")
+    assert "TAVILY_API_KEY" in result
 
 def test_tools_registry_has_all_tools():
     # Every registered tool must be callable and have a docstring
