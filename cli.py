@@ -14,14 +14,14 @@ from rich.text import Text
 
 console = Console()
 
-BANNER = """[bold cyan]LLM Harness[/bold cyan] — a minimal agent loop
+BANNER = """[bold white]LLM Harness[/bold white] — a minimal agent loop
 
 [dim]How it works:[/dim]
-  [cyan]1.[/cyan] Your message is added to a conversation list
-  [cyan]2.[/cyan] The model generates a response (just tokens — no magic)
-  [cyan]3.[/cyan] If the response is a JSON tool call, the harness runs it and feeds the result back
-  [cyan]4.[/cyan] This repeats until the model responds in plain text
-  [cyan]5.[/cyan] That's it — this is what Claude Code does too, just with more tools
+  [dim]1.[/dim] Your message is added to a conversation list
+  [dim]2.[/dim] The model generates a response (just tokens — no magic)
+  [dim]3.[/dim] If the response is a JSON tool call, the harness runs it and feeds the result back
+  [dim]4.[/dim] This repeats until the model responds in plain text
+  [dim]5.[/dim] That's it — this is what Claude Code does too, just with more tools
 
 Type [bold]quit[/bold] to exit.
 """
@@ -29,18 +29,18 @@ Type [bold]quit[/bold] to exit.
 
 def print_banner():
     """Print the startup banner explaining how the harness works."""
-    console.print(Panel(BANNER, border_style="cyan"))
+    console.print(Panel(BANNER, border_style="dim"))
 
 
 def print_assistant(message: str):
     """Display the assistant's final plain-text response."""
-    console.print(f"\n[bold blue]Assistant:[/bold blue] {message}\n")
+    console.print(f"\n[dim]→[/dim] {message}\n")
 
 
 def print_tool_call(tool_name: str, args: dict):
     """Display an incoming tool call request."""
     args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items())
-    console.print(f"\n[bold yellow]⚙ Tool call:[/bold yellow] [cyan]{tool_name}[/cyan]({args_str})")
+    console.print(f"\n[bold white]⚙ Tool call:[/bold white] [white]{tool_name}[/white]({args_str})")
 
 
 def print_tool_result(result: str):
@@ -57,13 +57,14 @@ def confirm_tool(tool_name: str, args: dict) -> bool:
     about presentation).
     """
     print_tool_call(tool_name, args)
-    return Confirm.ask("  Run this?", default=True)
+    response = console.input("  [dim]Run this? \\[Y/n] [/dim]").strip().lower()
+    return response in ("", "y")
 
 
 def get_user_input() -> str:
     """Prompt the user for input. Returns empty string on EOF/interrupt."""
     try:
-        return Prompt.ask("\n[bold green]You[/bold green]").strip()
+        return console.input("\n[bold orange1]❯[/bold orange1] ").strip()
     except (EOFError, KeyboardInterrupt):
         return ""
 
