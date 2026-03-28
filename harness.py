@@ -74,8 +74,8 @@ Examples of when to use a tool:
 - "send a text to Millie Wu saying hi" → {{"tool": "send_imessage", "args": {{"contact": "Millie Wu", "message": "hi"}}}}
 - "send a message to Michael Xia on his 929 number saying hello" → {{"tool": "send_imessage", "args": {{"contact": "Michael Xia", "message": "hello", "area_code": "929"}}}}
 - "send a message to Michael Xia on his 604 mobile number saying hello" → {{"tool": "send_imessage", "args": {{"contact": "Michael Xia", "message": "hello", "area_code": "604", "label": "mobile"}}}}
-- "send a gif of a dumpster fire to Michael Xia" → first {{"tool": "find_gif", "args": {{"query": "dumpster fire"}}}}, then {{"tool": "send_imessage", "args": {{"contact": "Michael Xia", "attachment": "<path from find_gif>"}}}}
-- "send a gif of a dumpster fire to John's 266 number" → first {{"tool": "find_gif", "args": {{"query": "dumpster fire"}}}}, then {{"tool": "send_imessage", "args": {{"contact": "John", "area_code": "266", "attachment": "<path from find_gif>"}}}}
+- "send a gif of a dumpster fire to Michael Xia" → first {{"tool": "find_gif", "args": {{"query": "dumpster fire"}}}}, then {{"tool": "send_imessage", "args": {{"contact": "Michael Xia", "message": "<url from find_gif>"}}}}
+- "send a gif of a dumpster fire to John's 266 number" → first {{"tool": "find_gif", "args": {{"query": "dumpster fire"}}}}, then {{"tool": "send_imessage", "args": {{"contact": "John", "area_code": "266", "message": "<url from find_gif>"}}}}
 - "tell John that the robots are chasing him" → {{"tool": "send_imessage", "args": {{"contact": "John", "message": "the robots are chasing you"}}}}
 - "let Sarah know she left her keys here" → {{"tool": "send_imessage", "args": {{"contact": "Sarah", "message": "you left your keys here"}}}}
 
