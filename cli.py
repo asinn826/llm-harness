@@ -48,6 +48,7 @@ def print_assistant(message: str):
     console.print(f"\n[dim]→[/dim] {message}\n")
 
 
+
 def print_tool_call(tool_name: str, args: dict):
     """Display an incoming tool call request."""
     args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items())

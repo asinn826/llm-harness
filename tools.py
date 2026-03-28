@@ -61,6 +61,79 @@ def calculator(expression: str) -> str:
         return f"Error: {e}"
 
 
+def send_imessage(contact: str, message: str, area_code: str = "", label: str = "") -> str:
+    """Send a text message to a contact by name using the macOS Messages app. Args: contact (str) - full name as it appears in Contacts (e.g. "Millie Wu"), message (str) - the message text to send, area_code (str, optional) - filter to a phone number with this area code (e.g. "929"), label (str, optional) - filter by phone label such as "mobile", "home", "work", "iPhone" (case-insensitive). Both filters can be combined. Returns: "OK" on success or "Error: <message>" on failure."""
+    # AppleScript doesn't support backslash escaping in strings, so we pass
+    # the message via an environment variable and read it with do shell script.
+    if area_code or label:
+        area_code_check = f'''
+            set cleanPhone to ""
+            repeat with c in characters of phoneVal
+                if c is in "0123456789" then set cleanPhone to cleanPhone & c
+            end repeat
+            if (length of cleanPhone > 10) and cleanPhone starts with "1" then
+                set cleanPhone to text 2 thru -1 of cleanPhone
+            end if
+            if not (cleanPhone starts with "{area_code}") then set matches to false''' if area_code else ""
+
+        label_check = f'''
+            ignoring case
+                if phoneLabel does not contain "{label}" then set matches to false
+            end ignoring''' if label else ""
+
+        filter_desc = " and ".join(filter(None, [
+            f"area code {area_code}" if area_code else "",
+            f'label "{label}"' if label else "",
+        ]))
+
+        phone_selection = f'''
+    set thePhone to ""
+    repeat with p in phones of thePerson
+        set phoneVal to (value of p) as text
+        set phoneLabel to (label of p) as text
+        set matches to true
+        {area_code_check}
+        {label_check}
+        if matches then
+            set thePhone to phoneVal
+            exit repeat
+        end if
+    end repeat
+    if thePhone is "" then error "No phone number matching {filter_desc} found for \\"{contact}\\""'''
+    else:
+        phone_selection = '''
+    if (count of phones of thePerson) is 0 then error "Contact has no phone number"
+    set thePhone to value of item 1 of phones of thePerson'''
+
+    script = f'''
+tell application "Contacts"
+    set matchingPeople to (every person whose name contains "{contact}")
+    if (count of matchingPeople) is 0 then
+        error "No contact named \\"{contact}\\" found"
+    end if
+    set thePerson to item 1 of matchingPeople{phone_selection}
+end tell
+set theMsg to do shell script "echo $MSG"
+tell application "Messages"
+    try
+        set theService to 1st service whose service type = iMessage
+        send theMsg to buddy thePhone of theService
+    on error
+        set theService to 1st service whose service type = SMS
+        send theMsg to buddy thePhone of theService
+    end try
+end tell
+'''
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True, text=True, timeout=15,
+        env={**__import__("os").environ, "MSG": message},
+    )
+    if result.returncode != 0:
+        return f"Error: {result.stderr.strip()}"
+    return "OK"
+
+
 def fetch_url(url: str) -> str:
     """Fetch the content of a webpage and return it as plain text. Args: url (str). Returns: page content as plain text (truncated to 3000 chars), or "Error: <message>" on failure."""
     try:
@@ -102,4 +175,5 @@ TOOLS = {
     "calculator": calculator,
     "fetch_url": fetch_url,
     "web_search": web_search,
+    "send_imessage": send_imessage,
 }
