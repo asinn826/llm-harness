@@ -1,6 +1,7 @@
 transformers>=4.40
 torch>=2.2
 requests>=2.31
+html2text>=2020.1
 tavily-python>=0.3
 python-dotenv>=1.0
 rich>=13.0

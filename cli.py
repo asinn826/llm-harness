@@ -5,6 +5,9 @@ keeping presentation separate means you can swap out the CLI for an API or web
 interface without touching any core logic. The harness calls back into here via
 the confirm_fn parameter.
 """
+import atexit
+import readline
+from pathlib import Path
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
@@ -13,6 +16,14 @@ from rich.live import Live
 from rich.text import Text
 
 console = Console()
+
+_HISTORY_FILE = Path.home() / ".llm_harness_history"
+try:
+    readline.read_history_file(_HISTORY_FILE)
+except FileNotFoundError:
+    pass
+readline.set_history_length(500)
+atexit.register(readline.write_history_file, _HISTORY_FILE)
 
 BANNER = """[bold white]LLM Harness[/bold white] — a minimal agent loop
 
@@ -64,7 +75,7 @@ def confirm_tool(tool_name: str, args: dict) -> bool:
 def get_user_input() -> str:
     """Prompt the user for input. Returns empty string on EOF/interrupt."""
     try:
-        return console.input("\n[bold orange1]❯[/bold orange1] ").strip()
+        return input("\n\033[1;38;5;214m❯\033[0m ").strip()
     except (EOFError, KeyboardInterrupt):
         return ""
 

@@ -52,6 +52,7 @@ IMPORTANT rules:
 - Only use a tool when the request requires external information or an action you cannot answer from memory.
 - For greetings, chitchat, or questions you already know the answer to, respond in plain text — do NOT call a tool.
 - Only call one tool at a time. Wait for the result before calling another.
+- Copy URLs, file paths, and other exact strings from the user's message character for character. Never correct or modify them.
 
 Examples of when NOT to use a tool (respond in plain text):
 - "hello" → "Hello! How can I help you?"
@@ -61,7 +62,11 @@ Examples of when NOT to use a tool (respond in plain text):
 Examples of when to use a tool:
 - "what files are in this folder?" → {{"tool": "run_shell", "args": {{"command": "ls"}}}}
 - "what is 123 * 456?" → {{"tool": "calculator", "args": {{"expression": "123 * 456"}}}}
-- "search for the latest Python release" → {{"tool": "web_search", "args": {{"query": "latest Python release"}}}}"""
+- "search for the latest Python release" → {{"tool": "web_search", "args": {{"query": "latest Python release"}}}}
+- "what does alfredsin.com contain?" → {{"tool": "fetch_url", "args": {{"url": "http://alfredsin.com"}}}}
+- "fetch http://my-site.co/page" → {{"tool": "fetch_url", "args": {{"url": "http://my-site.co/page"}}}}
+
+CRITICAL: URLs and file paths must be copied EXACTLY as the user wrote them. Do not fix typos, add missing letters, or modify them in any way. If the user says "alfredsin.com", use "alfredsin.com" — not "alfredsins.com" or any other variation."""
 
 
 def parse_tool_call(response: str) -> Optional[dict]:

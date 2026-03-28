@@ -11,6 +11,7 @@ To add a new tool:
 import ast
 import os
 import subprocess
+import html2text
 import requests
 
 
@@ -60,6 +61,19 @@ def calculator(expression: str) -> str:
         return f"Error: {e}"
 
 
+def fetch_url(url: str) -> str:
+    """Fetch the content of a webpage and return it as plain text. Args: url (str). Returns: page content as plain text (truncated to 3000 chars), or "Error: <message>" on failure."""
+    try:
+        resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+        h = html2text.HTML2Text()
+        h.ignore_links = True
+        h.ignore_images = True
+        text = h.handle(resp.text).strip()
+        return text[:3000] + "\n... (truncated)" if len(text) > 3000 else text
+    except Exception as e:
+        return f"Error: {e}"
+
+
 def web_search(query: str) -> str:
     """Search the web using Tavily and return results. Args: query (str). Returns: newline-joined results (title + content snippet per result), "No results found.", or "Error: <message>"."""
     api_key = os.environ.get("TAVILY_API_KEY")
@@ -86,5 +100,6 @@ TOOLS = {
     "read_file": read_file,
     "write_file": write_file,
     "calculator": calculator,
+    "fetch_url": fetch_url,
     "web_search": web_search,
 }

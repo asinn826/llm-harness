@@ -1,7 +1,7 @@
 """Tests for tool functions."""
 import pytest
 from unittest.mock import patch, MagicMock
-from tools import run_shell, read_file, write_file, calculator, web_search, TOOLS
+from tools import run_shell, read_file, write_file, calculator, fetch_url, web_search, TOOLS
 
 def test_run_shell_returns_output():
     result = run_shell("echo hello")
@@ -37,6 +37,27 @@ def test_calculator_bad_expression():
 
 def test_calculator_division_by_zero():
     result = calculator("1 / 0")
+    assert "Error" in result
+
+def test_fetch_url_returns_text():
+    mock_response = MagicMock()
+    mock_response.text = "<html><body><h1>Hello</h1><p>World</p></body></html>"
+    with patch("tools.requests.get", return_value=mock_response):
+        result = fetch_url("https://example.com")
+    assert "Hello" in result
+    assert "World" in result
+
+def test_fetch_url_truncates_long_content():
+    mock_response = MagicMock()
+    mock_response.text = f"<p>{'a' * 5000}</p>"
+    with patch("tools.requests.get", return_value=mock_response):
+        result = fetch_url("https://example.com")
+    assert len(result) <= 3020  # 3000 + len("... (truncated)")
+    assert "truncated" in result
+
+def test_fetch_url_handles_error():
+    with patch("tools.requests.get", side_effect=Exception("connection error")):
+        result = fetch_url("https://example.com")
     assert "Error" in result
 
 def test_web_search_returns_results():
