@@ -11,6 +11,7 @@ To add a new tool:
 import ast
 import os
 import subprocess
+import tempfile
 import html2text
 import requests
 
@@ -61,8 +62,29 @@ def calculator(expression: str) -> str:
         return f"Error: {e}"
 
 
-def send_imessage(contact: str, message: str, area_code: str = "", label: str = "") -> str:
-    """Send a text message to a contact by name using the macOS Messages app. Args: contact (str) - full name as it appears in Contacts (e.g. "Millie Wu"), message (str) - the message text to send, area_code (str, optional) - filter to a phone number with this area code (e.g. "929"), label (str, optional) - filter by phone label such as "mobile", "home", "work", "iPhone" (case-insensitive). Both filters can be combined. Returns: "OK" on success or "Error: <message>" on failure."""
+def find_gif(query: str) -> str:
+    """Search Tenor for a GIF matching the query and download it to a temp file. Args: query (str). Returns: local file path to the downloaded GIF, or "Error: <message>" on failure."""
+    try:
+        resp = requests.get(
+            "https://api.tenor.com/v1/search",
+            params={"q": query, "limit": 1, "media_filter": "minimal", "key": "LIVDSRZULELA"},
+            timeout=10,
+        )
+        results = resp.json().get("results", [])
+        if not results:
+            return "Error: No GIFs found"
+        gif_url = results[0]["media"][0]["gif"]["url"]
+        gif_data = requests.get(gif_url, timeout=15).content
+        tmp = tempfile.NamedTemporaryFile(suffix=".gif", delete=False)
+        tmp.write(gif_data)
+        tmp.close()
+        return tmp.name
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def send_imessage(contact: str, message: str = "", area_code: str = "", label: str = "", attachment: str = "") -> str:
+    """Send a text message and/or file attachment to a contact by name using the macOS Messages app. Args: contact (str) - full name as it appears in Contacts (e.g. "Millie Wu"), message (str, optional) - the message text to send, area_code (str, optional) - filter to a phone number with this area code (e.g. "929"), label (str, optional) - filter by phone label such as "mobile", "home", "work", "iPhone" (case-insensitive), attachment (str, optional) - local file path to attach (e.g. a GIF from find_gif). Returns: confirmation string or "Error: <message>" on failure."""
     # AppleScript doesn't support backslash escaping in strings, so we pass
     # the message via an environment variable and read it with do shell script.
     if area_code or label:
@@ -114,6 +136,7 @@ tell application "Contacts"
     set thePerson to item 1 of matchingPeople{phone_selection}
 end tell
 set theMsg to do shell script "echo $MSG"
+set theAttachment to do shell script "echo $ATTACHMENT"
 -- Normalize to E.164 (+1XXXXXXXXXX) so Messages can look up the buddy reliably
 set digits to do shell script "echo " & quoted form of (thePhone as text) & " | tr -dc 0-9"
 if (count of digits) = 10 then set digits to "1" & digits
@@ -121,17 +144,21 @@ set thePhone to "+" & digits
 tell application "Messages"
     try
         set theService to 1st service whose service type = iMessage
-        send theMsg to buddy thePhone of theService
+        set theBuddy to buddy thePhone of theService
+        if theAttachment is not "" then send POSIX file theAttachment to theBuddy
+        if theMsg is not "" then send theMsg to theBuddy
     on error
         set theService to 1st service whose service type = SMS
-        send theMsg to buddy thePhone of theService
+        set theBuddy to buddy thePhone of theService
+        if theAttachment is not "" then send POSIX file theAttachment to theBuddy
+        if theMsg is not "" then send theMsg to theBuddy
     end try
 end tell
 '''
     result = subprocess.run(
         ["osascript", "-e", script],
         capture_output=True, text=True, timeout=15,
-        env={**__import__("os").environ, "MSG": message},
+        env={**os.environ, "MSG": message, "ATTACHMENT": attachment},
     )
     if result.returncode != 0:
         return f"Error: {result.stderr.strip()}"
@@ -179,5 +206,6 @@ TOOLS = {
     "calculator": calculator,
     "fetch_url": fetch_url,
     "web_search": web_search,
+    "find_gif": find_gif,
     "send_imessage": send_imessage,
 }
