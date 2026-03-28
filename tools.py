@@ -114,6 +114,10 @@ tell application "Contacts"
     set thePerson to item 1 of matchingPeople{phone_selection}
 end tell
 set theMsg to do shell script "echo $MSG"
+-- Normalize to E.164 (+1XXXXXXXXXX) so Messages can look up the buddy reliably
+set digits to do shell script "echo " & quoted form of (thePhone as text) & " | tr -dc 0-9"
+if (count of digits) = 10 then set digits to "1" & digits
+set thePhone to "+" & digits
 tell application "Messages"
     try
         set theService to 1st service whose service type = iMessage
@@ -131,7 +135,7 @@ end tell
     )
     if result.returncode != 0:
         return f"Error: {result.stderr.strip()}"
-    return "OK"
+    return f"Message queued for delivery to {contact}. Delivery not guaranteed — check Messages.app to confirm it sent."
 
 
 def fetch_url(url: str) -> str:
