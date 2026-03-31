@@ -8,7 +8,8 @@ Claude code at home:
 
 ```bash
 pip install -r requirements.txt
-python3 main.py --model Qwen/Qwen2.5-1.5B-Instruct
+python3 main.py --model Qwen/Qwen2.5-1.5B-Instruct  # fast, less capable
+python3 main.py --model Qwen/Qwen2.5-7B-Instruct    # slower, more capable
 ```
 
 ## Structure
