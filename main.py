@@ -124,9 +124,12 @@ def main():
 
     while True:
         user_input = get_user_input()
-        if not user_input or user_input.lower() == "quit":
+        if user_input is None or user_input.lower() == "quit":
             console.print("\n[dim]Goodbye.[/dim]")
             break
+
+        if not user_input:
+            continue
 
         response = run_conversation_turn(
             user_input,

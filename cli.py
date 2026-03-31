@@ -8,6 +8,7 @@ the confirm_fn parameter.
 import atexit
 import readline
 from pathlib import Path
+from typing import Optional
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Prompt, Confirm
@@ -24,6 +25,15 @@ except FileNotFoundError:
     pass
 readline.set_history_length(500)
 atexit.register(readline.write_history_file, _HISTORY_FILE)
+
+# Word-by-word navigation with Option+Left/Right.
+# Terminals send different sequences depending on config:
+#   \e[1;3D / \e[1;3C  — macOS Terminal.app with "Use Option as Meta key"
+#   \e[3D   / \e[3C    — some other terminals
+readline.parse_and_bind(r'"\e[1;3D": backward-word')
+readline.parse_and_bind(r'"\e[1;3C": forward-word')
+readline.parse_and_bind(r'"\e[3D": backward-word')
+readline.parse_and_bind(r'"\e[3C": forward-word')
 
 BANNER = """[bold white]LLM Harness[/bold white] — a minimal agent loop
 
@@ -73,12 +83,19 @@ def confirm_tool(tool_name: str, args: dict) -> bool:
     return response in ("", "y")
 
 
-def get_user_input() -> str:
-    """Prompt the user for input. Returns empty string on EOF/interrupt."""
+def get_user_input() -> Optional[str]:
+    """Prompt the user for input. Returns None on EOF/interrupt, empty string on blank input."""
     try:
-        return input("\n\033[1;38;5;214m❯\033[0m ").strip()
+        print()  # blank line before prompt — kept outside input() so readline ignores it
+        text = input("\001\033[1;38;5;214m\002❯\001\033[0m\002 ").strip()
+        # Prune throwaway entries from history so they don't pollute up-arrow navigation
+        if not text or text.lower() == "quit":
+            length = readline.get_current_history_length()
+            if length > 0:
+                readline.remove_history_item(length - 1)
+        return text
     except (EOFError, KeyboardInterrupt):
-        return ""
+        return None
 
 
 def thinking_spinner(label: str = "Thinking..."):

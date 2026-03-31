@@ -42,7 +42,7 @@ def build_system_prompt(tools: dict) -> str:
     tool_descriptions = json.dumps(list(schemas.values()), indent=2)
     return f"""You are a helpful assistant with access to tools.
 
-To use a tool, respond with ONLY a JSON object in this exact format:
+To use a tool, respond with ONLY a JSON object in this exact format — no preamble, no explanation, no text before or after the JSON:
 {{"tool": "<tool_name>", "args": {{"<arg_name>": "<value>"}}}}
 
 Available tools:
@@ -55,6 +55,7 @@ IMPORTANT rules:
 - For greetings, chitchat, or questions you already know the answer to, respond in plain text — do NOT call a tool.
 - Only call one tool at a time. Wait for the result before calling another.
 - Copy URLs, file paths, and other exact strings from the user's message character for character. Never correct or modify them.
+- After receiving a tool result, answer the user's original question using that result — don't just repeat the raw output. If the user asked for a summary, summarize. If they asked for a count, count.
 
 Examples of when NOT to use a tool (respond in plain text):
 - "hello" → "Hello! How can I help you?"
@@ -72,6 +73,13 @@ Examples of when to use a tool:
 - "what is 123 * 456?" → {{"tool": "calculator", "args": {{"expression": "123 * 456"}}}}
 - "search for the latest Python release" → {{"tool": "web_search", "args": {{"query": "latest Python release"}}}}
 - "send a text to Millie Wu saying hi" → {{"tool": "send_imessage", "args": {{"contact": "Millie Wu", "message": "hi"}}}}
+- "what was my most recent text?" → {{"tool": "read_imessages", "args": {{"contact": "", "limit": 1}}}}
+- "what was my most recently received text?" → {{"tool": "read_imessages", "args": {{"contact": "", "limit": 1, "received_only": true}}}}
+- "what did John say?" → {{"tool": "read_imessages", "args": {{"contact": "John"}}}}
+- "read my last 5 messages from Sarah" → {{"tool": "read_imessages", "args": {{"contact": "Sarah", "limit": 5}}}}
+- "summarize recent messages from Michael Xia" → {{"tool": "read_imessages", "args": {{"contact": "Michael Xia"}}}}
+- "summarize my conversation with Sarah" → {{"tool": "read_imessages", "args": {{"contact": "Sarah"}}}}
+- "what has John been saying lately?" → {{"tool": "read_imessages", "args": {{"contact": "John"}}}}
 - "send a message to Michael Xia on his 929 number saying hello" → {{"tool": "send_imessage", "args": {{"contact": "Michael Xia", "message": "hello", "area_code": "929"}}}}
 - "send a message to Michael Xia on his 604 mobile number saying hello" → {{"tool": "send_imessage", "args": {{"contact": "Michael Xia", "message": "hello", "area_code": "604", "label": "mobile"}}}}
 - "send a gif of a dumpster fire to Michael Xia" → first {{"tool": "find_gif", "args": {{"query": "dumpster fire"}}}}, then {{"tool": "send_imessage", "args": {{"contact": "Michael Xia", "message": "<url from find_gif>"}}}}
@@ -92,17 +100,44 @@ def parse_tool_call(response: str) -> Optional[dict]:
     Returns a dict with "tool" and "args" keys if the response is a tool call,
     or None if it's a plain text response.
 
-    Handles markdown code blocks (```json ... ```) since some models wrap JSON
-    in fences even when instructed not to.
+    Handles markdown code blocks (```json ... ```) and preamble text since some
+    models wrap JSON in fences or add text before the JSON even when instructed
+    not to.
     """
     # Strip markdown code fences if present
     text = re.sub(r"```(?:json)?\s*(.*?)\s*```", r"\1", response, flags=re.DOTALL).strip()
+
+    # Try the whole response first (fast path)
     try:
         data = json.loads(text)
         if isinstance(data, dict) and isinstance(data.get("tool"), str):
             return data
     except (json.JSONDecodeError, ValueError):
         pass
+
+    # Fall back: scan for a brace-balanced {...} block containing "tool".
+    # The simple [^{}]* regex fails on nested objects like {"args": {...}},
+    # so we use bracket matching instead.
+    for i, ch in enumerate(text):
+        if ch != '{':
+            continue
+        depth = 0
+        for j in range(i, len(text)):
+            if text[j] == '{':
+                depth += 1
+            elif text[j] == '}':
+                depth -= 1
+            if depth == 0:
+                candidate = text[i:j + 1]
+                if '"tool"' in candidate:
+                    try:
+                        data = json.loads(candidate)
+                        if isinstance(data, dict) and isinstance(data.get("tool"), str):
+                            return data
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                break
+
     return None
 
 

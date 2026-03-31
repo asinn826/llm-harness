@@ -9,8 +9,11 @@ To add a new tool:
   That's it.
 """
 import ast
+import glob
 import os
+import sqlite3
 import subprocess
+from datetime import datetime
 import html2text
 import requests
 
@@ -59,6 +62,199 @@ def calculator(expression: str) -> str:
         return str(eval(compile(tree, "<string>", "eval")))
     except Exception as e:
         return f"Error: {e}"
+
+
+def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -> str:
+    """Read recent iMessages. Args: contact (str) - contact name as it appears in Contacts; pass empty string "" to get most recent messages across all conversations, limit (int, optional) - number of recent messages to return (default 10), received_only (bool, optional) - if true, only return messages received from others (not sent by you). Returns: formatted message history or an error with setup instructions."""
+    APPLE_EPOCH = 978307200  # seconds between Unix epoch (1970) and Apple epoch (2001)
+    db_path = os.path.expanduser("~/Library/Messages/chat.db")
+
+    if not os.access(db_path, os.R_OK):
+        subprocess.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"])
+        return (
+            "Full Disk Access is required to read iMessages — System Settings has been opened for you.\n\n"
+            "Why we're asking: iMessages are stored in ~/Library/Messages/chat.db, "
+            "a file macOS protects for your privacy. This tool only reads from that file — "
+            "it never writes to, modifies, or shares your messages.\n\n"
+            "To grant access:\n"
+            "  1. Enable access for Terminal in the Full Disk Access list\n"
+            "  2. Try your request again\n\n"
+            "You can revoke this permission at any time from the same settings screen."
+        )
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    except sqlite3.OperationalError as e:
+        return f"Error opening messages database: {e}"
+
+    def last10(phone):
+        digits = ''.join(c for c in phone if c.isdigit())
+        return digits[-10:] if len(digits) >= 10 else digits
+
+    def decode_message_text(text, attributed_body):
+        if text:
+            return text
+        if not attributed_body:
+            return None
+        # attributedBody is a typedstream (NeXT legacy binary format).
+        # The message text is stored as +<length_byte><utf8_data> between
+        # the NSString and NSDictionary class markers.
+        try:
+            start = attributed_body.find(b'NSString')
+            end = attributed_body.find(b'NSDictionary')
+            if start == -1 or end == -1 or end <= start:
+                return None
+            chunk = attributed_body[start + 8:end]
+            plus_pos = chunk.find(b'+')
+            if plus_pos == -1 or plus_pos + 1 >= len(chunk):
+                return None
+            length = chunk[plus_pos + 1]
+            text_start = plus_pos + 2
+            return chunk[text_start:text_start + length].decode('utf-8', errors='replace')
+        except Exception:
+            return None
+
+    try:
+        cursor = conn.cursor()
+
+        if not contact:
+            # No contact specified — return most recent messages across all conversations,
+            # with the chat_identifier as the sender label for received messages.
+            received_filter = "AND m.is_from_me = 0" if received_only else ""
+            cursor.execute(f"""
+                SELECT DISTINCT m.text, m.attributedBody, m.is_from_me, m.date,
+                       c.display_name, c.chat_identifier
+                FROM message m
+                JOIN chat_message_join cmj ON m.rowid = cmj.message_id
+                JOIN chat c ON cmj.chat_id = c.rowid
+                WHERE 1=1 {received_filter}
+                ORDER BY m.date DESC LIMIT ?
+            """, [limit])
+            rows = cursor.fetchall()
+            if not rows:
+                return "No messages found."
+
+            # Reverse-resolve sender phone numbers to contact names by querying
+            # the AddressBook SQLite databases directly — much faster than AppleScript.
+            name_map = {}
+            ab_dbs = glob.glob(os.path.expanduser(
+                "~/Library/Application Support/AddressBook/Sources/*/AddressBook-v*.abcddb"
+            ))
+            for ab_path in ab_dbs:
+                try:
+                    ab = sqlite3.connect(f"file:{ab_path}?mode=ro", uri=True)
+                    ab_cur = ab.cursor()
+                    ab_cur.execute("""
+                        SELECT r.ZFIRSTNAME, r.ZLASTNAME, r.ZORGANIZATION, p.ZFULLNUMBER
+                        FROM ZABCDPHONENUMBER p
+                        JOIN ZABCDRECORD r ON p.ZOWNER = r.Z_PK
+                        WHERE p.ZFULLNUMBER IS NOT NULL
+                    """)
+                    for first, last, org, phone in ab_cur.fetchall():
+                        d = last10(phone)
+                        if d and d not in name_map:
+                            name = " ".join(filter(None, [first, last])) or org or ""
+                            if name:
+                                name_map[d] = name
+                    ab.close()
+                except Exception:
+                    pass
+
+            lines = []
+            for text, attributed_body, is_from_me, date, display_name, chat_id in reversed(rows):
+                body = decode_message_text(text, attributed_body)
+                if not body:
+                    continue
+                ts = (date / 1e9 if date > 1e12 else date) + APPLE_EPOCH
+                dt = datetime.fromtimestamp(ts).strftime("%b %d %H:%M")
+                if is_from_me:
+                    sender = "You"
+                else:
+                    digits = last10(chat_id or "")
+                    sender = name_map.get(digits) or display_name or chat_id or "Unknown"
+                lines.append(f"[{dt}] {sender}: {body}")
+            return '\n'.join(lines) if lines else "No readable messages found."
+
+        # Get contact's phone numbers AND emails via Contacts.app
+        script = f'''
+tell application "Contacts"
+    set matchingPeople to (every person whose name contains "{contact}")
+    if (count of matchingPeople) is 0 then return ""
+    set thePerson to item 1 of matchingPeople
+    set identList to ""
+    repeat with p in phones of thePerson
+        set identList to identList & (value of p as text) & ","
+    end repeat
+    repeat with e in emails of thePerson
+        set identList to identList & (value of e as text) & ","
+    end repeat
+    return identList
+end tell
+'''
+        result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
+        raw_identifiers = [p.strip() for p in result.stdout.strip().split(",") if p.strip()]
+
+        phone_digits = [last10(p) for p in raw_identifiers if any(c.isdigit() for c in p)]
+        emails = [e.lower() for e in raw_identifiers if '@' in e]
+
+        if not phone_digits and not emails:
+            phone_digits = [last10(contact)]
+
+        cursor.execute("SELECT rowid, id FROM handle")
+        all_handles = cursor.fetchall()
+        matching_handle_ids = [
+            rowid for rowid, hid in all_handles
+            if any(last10(hid) == d for d in phone_digits)
+            or hid.lower() in emails
+        ]
+
+        if not matching_handle_ids:
+            return f"No messages found for {contact}."
+
+        # Match via chat.chat_identifier (set to phone/email for 1:1 chats),
+        # then pull all messages in those chats — captures both sent and received.
+        cursor.execute("SELECT rowid, chat_identifier FROM chat")
+        matching_chat_ids = [
+            rowid for rowid, chat_id in cursor.fetchall()
+            if chat_id and (
+                any(last10(chat_id) == d for d in phone_digits)
+                or chat_id.lower() in emails
+            )
+        ]
+
+        if not matching_chat_ids:
+            return f"No messages found for {contact}. (handles checked: {len(matching_handle_ids)}, chats checked: 0)"
+
+        received_filter = "AND m.is_from_me = 0" if received_only else ""
+        placeholders = ','.join('?' * len(matching_chat_ids))
+        cursor.execute(f"""
+            SELECT DISTINCT m.text, m.attributedBody, m.is_from_me, m.date
+            FROM message m
+            JOIN chat_message_join cmj ON m.rowid = cmj.message_id
+            WHERE cmj.chat_id IN ({placeholders}) {received_filter}
+            ORDER BY m.date DESC LIMIT ?
+        """, matching_chat_ids + [limit])
+
+        rows = cursor.fetchall()
+        if not rows:
+            return f"No messages found for {contact}. (handles: {len(matching_handle_ids)}, chats: {len(matching_chat_ids)})"
+
+        first_name = contact.split()[0] if contact.split() else contact
+        lines = []
+        for text, attributed_body, is_from_me, date in reversed(rows):
+            body = decode_message_text(text, attributed_body)
+            if not body:
+                continue
+            ts = (date / 1e9 if date > 1e12 else date) + APPLE_EPOCH
+            dt = datetime.fromtimestamp(ts).strftime("%b %d %H:%M")
+            sender = "You" if is_from_me else first_name
+            lines.append(f"[{dt}] {sender}: {body}")
+
+        if not lines:
+            return f"No readable messages found for {contact} (messages may be attachments or reactions only)."
+        return '\n'.join(lines)
+    finally:
+        conn.close()
 
 
 def find_gif(query: str) -> str:
@@ -197,5 +393,6 @@ TOOLS = {
     "fetch_url": fetch_url,
     "web_search": web_search,
     "find_gif": find_gif,
+    "read_imessages": read_imessages,
     "send_imessage": send_imessage,
 }
