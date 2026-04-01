@@ -64,6 +64,12 @@ def calculator(expression: str) -> str:
         return f"Error: {e}"
 
 
+def _last10(phone: str) -> str:
+    """Return the last 10 digits of a phone number string."""
+    digits = ''.join(c for c in phone if c.isdigit())
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
 def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -> str:
     """Read recent iMessages. Args: contact (str) - contact name as it appears in Contacts; pass empty string "" to get most recent messages across all conversations, limit (int, optional) - number of recent messages to return (default 10), received_only (bool, optional) - if true, only return messages received from others (not sent by you). Returns: formatted message history or an error with setup instructions."""
     APPLE_EPOCH = 978307200  # seconds between Unix epoch (1970) and Apple epoch (2001)
@@ -86,10 +92,6 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     except sqlite3.OperationalError as e:
         return f"Error opening messages database: {e}"
-
-    def last10(phone):
-        digits = ''.join(c for c in phone if c.isdigit())
-        return digits[-10:] if len(digits) >= 10 else digits
 
     def decode_message_text(text, attributed_body):
         if text:
@@ -151,7 +153,7 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
                         WHERE p.ZFULLNUMBER IS NOT NULL
                     """)
                     for first, last, org, phone in ab_cur.fetchall():
-                        d = last10(phone)
+                        d = _last10(phone)
                         if d and d not in name_map:
                             name = " ".join(filter(None, [first, last])) or org or ""
                             if name:
@@ -170,7 +172,7 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
                 if is_from_me:
                     sender = "You"
                 else:
-                    digits = last10(chat_id or "")
+                    digits = _last10(chat_id or "")
                     sender = name_map.get(digits) or display_name or chat_id or "Unknown"
                 lines.append(f"[{dt}] {sender}: {body}")
             return '\n'.join(lines) if lines else "No readable messages found."
@@ -194,17 +196,17 @@ end tell
         result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
         raw_identifiers = [p.strip() for p in result.stdout.strip().split(",") if p.strip()]
 
-        phone_digits = [last10(p) for p in raw_identifiers if any(c.isdigit() for c in p)]
+        phone_digits = [_last10(p) for p in raw_identifiers if any(c.isdigit() for c in p)]
         emails = [e.lower() for e in raw_identifiers if '@' in e]
 
         if not phone_digits and not emails:
-            phone_digits = [last10(contact)]
+            phone_digits = [_last10(contact)]
 
         cursor.execute("SELECT rowid, id FROM handle")
         all_handles = cursor.fetchall()
         matching_handle_ids = [
             rowid for rowid, hid in all_handles
-            if any(last10(hid) == d for d in phone_digits)
+            if any(_last10(hid) == d for d in phone_digits)
             or hid.lower() in emails
         ]
 
@@ -217,7 +219,7 @@ end tell
         matching_chat_ids = [
             rowid for rowid, chat_id in cursor.fetchall()
             if chat_id and (
-                any(last10(chat_id) == d for d in phone_digits)
+                any(_last10(chat_id) == d for d in phone_digits)
                 or chat_id.lower() in emails
             )
         ]
@@ -317,7 +319,8 @@ def send_imessage(contact: str, message: str = "", area_code: str = "", label: s
     if (count of phones of thePerson) is 0 then error "Contact has no phone number"
     set thePhone to value of item 1 of phones of thePerson'''
 
-    script = f'''
+    # Step 1: resolve phone number from Contacts
+    lookup_script = f'''
 tell application "Contacts"
     set matchingPeople to (every person whose name contains "{contact}")
     if (count of matchingPeople) is 0 then
@@ -325,30 +328,64 @@ tell application "Contacts"
     end if
     set thePerson to item 1 of matchingPeople{phone_selection}
 end tell
+return thePhone
+'''
+    lookup = subprocess.run(["osascript", "-e", lookup_script], capture_output=True, text=True, timeout=10)
+    if lookup.returncode != 0:
+        return f"Error: {lookup.stderr.strip()}"
+    raw_phone = lookup.stdout.strip()
+
+    # Normalize to E.164
+    digits = ''.join(c for c in raw_phone if c.isdigit())
+    if len(digits) == 10:
+        digits = '1' + digits
+    e164 = '+' + digits
+    last10_digits = _last10(e164)
+
+    # Step 2: check chat.db to determine the right service for this number.
+    # Messages won't raise an error when sending iMessage to a non-iMessage number —
+    # it silently fails. So we look up the service from past conversations.
+    service_type = "iMessage"  # default; fall back to SMS if chat.db says otherwise
+    db_path = os.path.expanduser("~/Library/Messages/chat.db")
+    if os.access(db_path, os.R_OK):
+        try:
+            conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+            cur = conn.cursor()
+            cur.execute("SELECT id, service FROM handle")
+            for hid, svc in cur.fetchall():
+                if _last10(hid) == last10_digits:
+                    service_type = svc
+                    break
+            conn.close()
+        except Exception:
+            pass
+
+    # Step 3: send via the determined service, with fallback to the other
+    if service_type == "iMessage":
+        primary, fallback = "iMessage", "SMS"
+    else:
+        primary, fallback = "SMS", "iMessage"
+
+    send_script = f'''
 set theMsg to do shell script "echo $MSG"
--- Normalize to E.164 (+1XXXXXXXXXX) so Messages can look up the buddy reliably
-set digits to do shell script "echo " & quoted form of (thePhone as text) & " | tr -dc 0-9"
-if (count of digits) = 10 then set digits to "1" & digits
-set thePhone to "+" & digits
 tell application "Messages"
     try
-        set theService to 1st service whose service type = iMessage
-        send theMsg to buddy thePhone of theService
+        set theService to 1st service whose service type = {primary}
+        send theMsg to buddy "{e164}" of theService
     on error
-        set theService to 1st service whose service type = SMS
-        send theMsg to buddy thePhone of theService
+        set theService to 1st service whose service type = {fallback}
+        send theMsg to buddy "{e164}" of theService
     end try
 end tell
 '''
     result = subprocess.run(
-        ["osascript", "-e", script],
+        ["osascript", "-e", send_script],
         capture_output=True, text=True, timeout=15,
         env={**os.environ, "MSG": message},
-
     )
     if result.returncode != 0:
         return f"Error: {result.stderr.strip()}"
-    return f"Message queued for delivery to {contact}. Delivery not guaranteed — check Messages.app to confirm it sent."
+    return f"Message sent to {contact} via {service_type}. Check Messages.app to confirm delivery."
 
 
 def fetch_url(url: str) -> str:
