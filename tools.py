@@ -345,18 +345,24 @@ return thePhone
     # Step 2: check chat.db to determine the right service for this number.
     # Messages won't raise an error when sending iMessage to a non-iMessage number —
     # it silently fails. So we look up the service from past conversations.
-    service_type = "iMessage"  # default; fall back to SMS if chat.db says otherwise
+    # Step 2: check chat.db to determine the right service for this number.
+    # A contact may have multiple handles (e.g. an iMessage email handle AND
+    # an RCS/SMS phone handle). Prefer iMessage if any handle uses it.
+    service_type = "iMessage"  # default
     db_path = os.path.expanduser("~/Library/Messages/chat.db")
     if os.access(db_path, os.R_OK):
         try:
             conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
             cur = conn.cursor()
             cur.execute("SELECT id, service FROM handle")
+            services_found = set()
             for hid, svc in cur.fetchall():
                 if _last10(hid) == last10_digits:
-                    service_type = svc
-                    break
+                    services_found.add(svc)
             conn.close()
+            if services_found:
+                # Prefer iMessage > SMS/RCS
+                service_type = "iMessage" if "iMessage" in services_found else services_found.pop()
         except Exception:
             pass
 
