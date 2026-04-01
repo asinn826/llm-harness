@@ -23,6 +23,8 @@ Tested on Apple Silicon (36GB unified memory). Larger models follow instructions
 | `Qwen2.5-7B-Instruct` | ~14GB | Decent, still misses edge cases |
 | `Qwen2.5-14B-Instruct` | ~28GB | Recommended — good tool use, fits comfortably |
 | `Qwen2.5-32B-Instruct` | ~64GB (fp16) / ~20GB (4-bit) | Requires quantization; use `mlx-lm` for best performance on Apple Silicon |
+| `mistralai/Mistral-7B-Instruct-v0.3` | ~14GB | Good alternative to Qwen 7B; strong JSON formatting |
+| `meta-llama/Llama-3.1-8B-Instruct` | ~16GB | Another solid alternative at the 7-8B tier |
 
 For 32B+, [mlx-lm](https://github.com/ml-explore/mlx-examples/tree/main/llms) is faster than HuggingFace transformers on Apple Silicon.
 
