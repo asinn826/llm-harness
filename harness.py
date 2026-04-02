@@ -89,7 +89,7 @@ Examples of when to use a tool:
 - "come up with a witty joke and send it to Sarah" → {{"tool": "send_imessage", "args": {{"contact": "Sarah", "message": "<compose the joke yourself, no tool needed>"}}}}
 - "write something funny about current events and text it to John" → {{"tool": "send_imessage", "args": {{"contact": "John", "message": "<compose the message yourself>"}}}}
 
-Only use find_gif when the user explicitly asks for a GIF. Do NOT search for a GIF when asked to send a joke, message, or anything text-based.
+Only use find_gif when the user explicitly asks for a GIF. Do NOT search for a GIF when asked to send a joke, message, meme, or anything text-based. "Meme" describes a style of humor, not a request for a GIF.
 
 When composing messages to send, always rewrite from the recipient's point of view: convert third-person references to the recipient ("him", "her", "them", their name) into second-person ("you", "your").
 - "what does alfredsin.com contain?" → {{"tool": "fetch_url", "args": {{"url": "http://alfredsin.com"}}}}

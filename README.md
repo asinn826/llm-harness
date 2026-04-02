@@ -8,25 +8,27 @@ Claude code at home:
 
 ```bash
 pip install -r requirements.txt
-python3 main.py --model Qwen/Qwen2.5-1.5B-Instruct  # fast, less capable
-python3 main.py --model Qwen/Qwen2.5-7B-Instruct    # slower, more capable
-python3 main.py --model Qwen/Qwen2.5-14B-Instruct   # recommended sweet spot
+python3 main.py --model Qwen/Qwen2.5-1.5B-Instruct                 # fast, less capable
+python3 main.py --model Qwen/Qwen2.5-7B-Instruct                   # good balance
+python3 main.py --model mlx-community/Qwen2.5-14B-Instruct-4bit    # recommended sweet spot
 ```
 
 ## Model recommendations
 
 Tested on Apple Silicon (36GB unified memory). Larger models follow instructions more reliably and need fewer few-shot examples in the prompt.
 
-| Model | VRAM | Notes |
-|---|---|---|
-| `Qwen2.5-1.5B-Instruct` | ~3GB | Struggles with tool use, needs heavy prompting |
-| `Qwen2.5-7B-Instruct` | ~14GB | Decent, still misses edge cases |
-| `Qwen2.5-14B-Instruct` | ~28GB | Recommended — good tool use, fits comfortably |
-| `Qwen2.5-32B-Instruct` | ~64GB (fp16) / ~20GB (4-bit) | Requires quantization; use `mlx-lm` for best performance on Apple Silicon |
-| `mistralai/Mistral-7B-Instruct-v0.3` | ~14GB | Good alternative to Qwen 7B; strong JSON formatting |
-| `meta-llama/Llama-3.1-8B-Instruct` | ~16GB | Another solid alternative at the 7-8B tier |
+On Apple Silicon, [mlx-lm](https://github.com/ml-explore/mlx-examples/tree/main/llms) is used automatically (5-10x faster than HuggingFace transformers on MPS). Pass `--no-mlx` to force the HuggingFace backend.
 
-For 32B+, [mlx-lm](https://github.com/ml-explore/mlx-examples/tree/main/llms) is faster than HuggingFace transformers on Apple Silicon.
+Use pre-quantized `mlx-community` models — fp16 models are too large to run even at 14B on 36GB once you account for the KV cache and Metal overhead.
+
+| Model | Size | Notes |
+|---|---|---|
+| `Qwen/Qwen2.5-1.5B-Instruct` | ~3GB | Struggles with tool use, needs heavy prompting |
+| `Qwen/Qwen2.5-7B-Instruct` | ~14GB | Decent, still misses edge cases |
+| `mlx-community/Qwen2.5-14B-Instruct-4bit` | ~8GB | Recommended — good tool use, fast |
+| `mlx-community/Qwen2.5-32B-Instruct-4bit` | ~18GB | Best quality, still fits in 36GB |
+| `mistralai/Mistral-7B-Instruct-v0.3` | ~14GB | Good alternative; strong JSON formatting |
+| `meta-llama/Llama-3.1-8B-Instruct` | ~16GB | Another solid alternative at the 7-8B tier |
 
 ## Structure
 

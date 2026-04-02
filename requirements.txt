@@ -1,5 +1,6 @@
 transformers>=4.40
 torch>=2.2
+mlx-lm>=0.19; sys_platform == "darwin"
 requests>=2.31
 html2text>=2020.1
 tavily-python>=0.3
