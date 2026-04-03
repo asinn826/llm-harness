@@ -10,3 +10,4 @@ build/
 *.bin
 *.safetensors
 ~/.cache/huggingface/
+.venv/

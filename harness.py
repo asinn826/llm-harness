@@ -55,7 +55,7 @@ Available tools:
 IMPORTANT rules:
 - Only use a tool when the request requires external information or an action you cannot answer from memory.
 - For greetings, chitchat, or questions you already know the answer to, respond in plain text — do NOT call a tool.
-- Messages, notifications, and live data are NEVER available from memory. Always call the relevant tool to fetch them fresh, even if a previous tool result is in the conversation history. Previous results may be stale.
+- Messages, notifications, and live data are NEVER available from memory. Always call the relevant tool to fetch them fresh, even if a previous tool result is in the conversation history. Previous results may be stale. Never explain that you "would need to" call a tool — just call it.
 - Only call one tool at a time. Wait for the result before calling another.
 - Copy URLs, file paths, and other exact strings from the user's message character for character. Never correct or modify them.
 - After receiving a tool result, answer the user's original question using that result — don't just repeat the raw output. If the user asked for a summary, summarize. If they asked for a count, count.
@@ -113,6 +113,12 @@ def parse_tool_call(response: str) -> Optional[dict]:
     """
     # Strip markdown code fences if present
     text = re.sub(r"```(?:json)?\s*(.*?)\s*```", r"\1", response, flags=re.DOTALL).strip()
+
+    # Repair common model output errors before attempting to parse:
+    # - missing values like "limit": ,  →  "limit": null
+    text = re.sub(r':\s*,', ': null,', text)
+    # - trailing commas before } or ]
+    text = re.sub(r',\s*([}\]])', r'\1', text)
 
     # Try the whole response first (fast path)
     try:
@@ -186,6 +192,9 @@ def confirm_and_run(tool_call: dict, tools: dict, confirm_fn=None, result_fn=Non
 
     if tool_name not in tools:
         return f"Error: unknown tool '{tool_name}'"
+
+    # Drop null args so function defaults kick in rather than passing None
+    args = {k: v for k, v in args.items() if v is not None}
 
     if confirm_fn is None:
         print(f"[Tool call] {tool_name}({args})")
