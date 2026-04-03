@@ -13,6 +13,16 @@ python3 main.py --model Qwen/Qwen2.5-7B-Instruct                   # good balanc
 python3 main.py --model mlx-community/Qwen2.5-14B-Instruct-4bit    # recommended sweet spot
 ```
 
+## HuggingFace token
+
+A token is optional for public models but required for gated ones (e.g. Llama). To use one, create a `.env` file in this directory:
+
+```
+HF_TOKEN=hf_...
+```
+
+Get a token at huggingface.co/settings/tokens. For gated models, you also need to accept the model's terms on its HuggingFace page.
+
 ## Model recommendations
 
 Tested on Apple Silicon (36GB unified memory). Larger models follow instructions more reliably and need fewer few-shot examples in the prompt.
@@ -29,6 +39,24 @@ Use pre-quantized `mlx-community` models — fp16 models are too large to run ev
 | `mlx-community/Qwen2.5-32B-Instruct-4bit` | ~18GB | Best quality, still fits in 36GB |
 | `mistralai/Mistral-7B-Instruct-v0.3` | ~14GB | Good alternative; strong JSON formatting |
 | `meta-llama/Llama-3.1-8B-Instruct` | ~16GB | Another solid alternative at the 7-8B tier |
+
+Models that support it (e.g. Gemma 4) are loaded via the `--no-mlx` HuggingFace backend. mlx-lm support for newer architectures lags a few days behind releases.
+
+## Chain-of-thought
+
+Chain-of-thought (thinking mode) is disabled by default. For the current tool-use workload — short commands, message sending, lookups — it adds latency with no benefit.
+
+If you expand the harness to handle more complex tasks (multi-step reasoning, coding, math), re-enable it by changing `enable_thinking=False` to `True` in `make_model_fn_hf` in `main.py`. Only models that explicitly support the `enable_thinking` flag (e.g. Gemma 4) will use it; others fall back gracefully.
+
+## Python version
+
+The HuggingFace backend requires Python 3.10+. mlx-lm works on 3.9+. If you're on the system Python (3.9), install a newer version:
+
+```bash
+brew install python@3.11
+```
+
+Then run with `python3.11` and `pip3.11`.
 
 ## Structure
 

@@ -69,82 +69,101 @@ def make_model_fn_mlx(tokenizer, model, system_prompt: str):
 
 
 def load_model_hf(model_id: str):
-    """Load a HuggingFace model and tokenizer onto the best available device.
+    """Load a HuggingFace model and processor onto the best available device.
 
-    Uses float16 on CUDA for speed, float32 on CPU (float16 causes numerical
-    issues on some CPU implementations).
+    Uses AutoProcessor (superset of AutoTokenizer — handles multimodal models
+    like Gemma 4 that have vision/audio processors alongside the tokenizer).
+    device_map="auto" with accelerate handles device placement, which avoids
+    the MPS caching_allocator_warmup bug triggered by explicit device_map="mps".
     """
-    from transformers import AutoTokenizer, AutoModelForCausalLM, logging as hf_logging
+    import os
+    from transformers import AutoProcessor, AutoModelForCausalLM, logging as hf_logging
+    from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError
+    import warnings
 
     # Suppress noisy but harmless transformers warnings about generation flags
     hf_logging.set_verbosity_error()
     logging.getLogger("transformers").setLevel(logging.ERROR)
 
-    if torch.cuda.is_available():
-        device_map = "cuda"
-        dtype = torch.float16
-    else:
-        device_map = None
-        dtype = torch.float32
+    # HF_TOKEN is optional — public models work without it. Gated models (e.g.
+    # Llama) require accepting terms on huggingface.co and setting HF_TOKEN in .env.
+    token = os.environ.get("HF_TOKEN") or None
 
-    with thinking_spinner(f"Loading {model_id}..."):
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            torch_dtype=dtype,
-            device_map=device_map,
-            low_cpu_mem_usage=True,
+    # Suppress the unauthenticated-request warning when no token is configured —
+    # it's just noise for public models.
+    warnings.filterwarnings("ignore", message=".*unauthenticated.*", category=UserWarning)
+
+    try:
+        with thinking_spinner(f"Loading {model_id}..."):
+            processor = AutoProcessor.from_pretrained(model_id, token=token)
+            model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                dtype="auto",
+                device_map="auto",
+                token=token,
+            )
+            model.eval()
+    except GatedRepoError:
+        console.print(
+            f"[red]✗ {model_id} is a gated model.[/red]\n"
+            "  Accept the terms at huggingface.co/[bold]{model_id}[/bold] then add your token to .env:\n"
+            "  [dim]HF_TOKEN=hf_...[/dim]"
         )
-        if device_map is None:
-            model = model.to("cpu")
-        model.eval()
-    console.print(f"[dim]✓ Model loaded ({model_id}) on {device_map or 'cpu'}[/dim]\n")
-    return tokenizer, model
+        raise SystemExit(1)
+    except RepositoryNotFoundError:
+        console.print(f"[red]✗ Model not found: {model_id}[/red]")
+        raise SystemExit(1)
+
+    console.print(f"[dim]✓ Model loaded ({model_id}) on {model.device}[/dim]\n")
+    return processor, model
 
 
-def make_model_fn_hf(tokenizer, model, system_prompt: str):
+def make_model_fn_hf(processor, model, system_prompt: str):
     """Return a callable(conversation) -> str that runs one generation step."""
     def model_fn(conversation: list) -> str:
         messages = [{"role": "system", "content": system_prompt}] + conversation
 
-        # apply_chat_template formats the conversation in the model's expected
-        # format (e.g. ChatML, Llama-3 tokens). Fall back to a manual format
-        # if the tokenizer doesn't support it.
-        if hasattr(tokenizer, "apply_chat_template") and tokenizer.chat_template:
-            input_ids = tokenizer.apply_chat_template(
-                messages,
-                return_tensors="pt",
-                add_generation_prompt=True,
-            ).to(model.device)
+        # apply_chat_template with tokenize=False returns a formatted string;
+        # processor() then converts it to tensors. This two-step approach works
+        # for both text-only models (Qwen, Llama) and multimodal ones (Gemma 4).
+        if hasattr(processor, "apply_chat_template") and processor.chat_template:
+            # enable_thinking=False: skip chain-of-thought for tool-use scenarios.
+            # The kwarg is ignored by models that don't support it.
+            try:
+                prompt = processor.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            except TypeError:
+                prompt = processor.apply_chat_template(
+                    messages,
+                    tokenize=False,
+                    add_generation_prompt=True,
+                )
+            inputs = processor(text=prompt, return_tensors="pt").to(model.device)
         else:
             lines = []
             for m in messages:
                 if m["role"] == "tool":
-                    # In fallback mode, present tool results as user context
                     lines.append(f"USER: [Tool result] {m['content']}")
                 else:
                     lines.append(f"{m['role'].upper()}: {m['content']}")
-            text = "\n".join(lines)
-            text += "\nASSISTANT:"
-            input_ids = tokenizer(text, return_tensors="pt").input_ids.to(model.device)
+            text = "\n".join(lines) + "\nASSISTANT:"
+            inputs = processor(text=text, return_tensors="pt").to(model.device)
 
-        # Build attention mask explicitly to avoid the pad==eos warning
-        attention_mask = torch.ones_like(input_ids)
+        input_len = inputs["input_ids"].shape[-1]
 
-        # Spinner only wraps generation — NOT confirmation prompts
         with thinking_spinner():
             with torch.no_grad():
                 output = model.generate(
-                    input_ids,
-                    attention_mask=attention_mask,
+                    **inputs,
                     max_new_tokens=512,
                     do_sample=False,
-                    pad_token_id=tokenizer.eos_token_id,
                 )
 
-        # Slice off the input tokens — we only want the newly generated ones
-        new_tokens = output[0][input_ids.shape[-1]:]
-        return tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+        return processor.decode(output[0][input_len:], skip_special_tokens=True).strip()
 
     return model_fn
 
