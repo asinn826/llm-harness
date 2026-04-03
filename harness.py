@@ -53,6 +53,7 @@ Available tools:
 IMPORTANT rules:
 - Only use a tool when the request requires external information or an action you cannot answer from memory.
 - For greetings, chitchat, or questions you already know the answer to, respond in plain text — do NOT call a tool.
+- Messages, notifications, and live data are NEVER available from memory. Always call the relevant tool to fetch them fresh, even if a previous tool result is in the conversation history. Previous results may be stale.
 - Only call one tool at a time. Wait for the result before calling another.
 - Copy URLs, file paths, and other exact strings from the user's message character for character. Never correct or modify them.
 - After receiving a tool result, answer the user's original question using that result — don't just repeat the raw output. If the user asked for a summary, summarize. If they asked for a count, count.
