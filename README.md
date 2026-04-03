@@ -11,6 +11,7 @@ pip install -r requirements.txt
 python3 main.py --model Qwen/Qwen2.5-1.5B-Instruct                 # fast, less capable
 python3 main.py --model Qwen/Qwen2.5-7B-Instruct                   # good balance
 python3 main.py --model mlx-community/Qwen2.5-14B-Instruct-4bit    # recommended sweet spot
+python3.11 main.py --model google/gemma-4-E4B-it --no-mlx          # Gemma 4 (requires Python 3.11+)
 ```
 
 ## HuggingFace token
