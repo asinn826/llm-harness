@@ -42,6 +42,17 @@ Use pre-quantized `mlx-community` models — fp16 models are too large to run ev
 
 Models that support it (e.g. Gemma 4) are loaded via the `--no-mlx` HuggingFace backend. mlx-lm support for newer architectures lags a few days behind releases.
 
+```bash
+python3.11 main.py --model google/gemma-4-E4B-it --no-mlx
+```
+
+Gemma 4 requires Python 3.10+ and the following extras:
+
+```bash
+pip3.11 install torch accelerate torchvision pillow
+pip3.11 install git+https://github.com/huggingface/transformers.git
+```
+
 ## Chain-of-thought
 
 Chain-of-thought (thinking mode) is disabled by default. For the current tool-use workload — short commands, message sending, lookups — it adds latency with no benefit.
