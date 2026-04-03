@@ -59,6 +59,15 @@ def test_parse_tool_call_returns_none_for_json_without_tool_key():
     assert result is None
 
 
+def test_parse_tool_call_handles_gemma_call_prefix():
+    """Gemma 4 sometimes outputs `call:"tool", "args": {...}` instead of valid JSON."""
+    response = 'call:"calculator", "args": {"expression": "2+2"}'
+    result = parse_tool_call(response)
+    assert result is not None
+    assert result["tool"] == "calculator"
+    assert result["args"] == {"expression": "2+2"}
+
+
 def test_run_conversation_turn_plain_response():
     """Model responds with plain text — no tool calls."""
     conversation = []

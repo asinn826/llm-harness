@@ -42,8 +42,10 @@ def build_system_prompt(tools: dict) -> str:
     tool_descriptions = json.dumps(list(schemas.values()), indent=2)
     return f"""You are a helpful assistant with access to tools.
 
-To use a tool, respond with ONLY a JSON object in this exact format — no preamble, no explanation, no text before or after the JSON:
+To use a tool, respond with ONLY a JSON object. The JSON must start with {{ and use exactly this structure:
 {{"tool": "<tool_name>", "args": {{"<arg_name>": "<value>"}}}}
+
+Do NOT write `call:`, do NOT add any text before or after the JSON. The entire response must be valid JSON starting with {{.
 
 Available tools:
 {tool_descriptions}
@@ -141,6 +143,26 @@ def parse_tool_call(response: str) -> Optional[dict]:
                             return data
                     except (json.JSONDecodeError, ValueError):
                         pass
+                break
+
+    # Last resort: handle Gemma-style `call:"tool_name", "args": {...}` output
+    # by extracting the tool name and using brace matching on the args object.
+    call_match = re.search(r'call:\s*"([^"]+)"\s*,\s*"args"\s*:\s*(\{)', text)
+    if call_match:
+        tool_name = call_match.group(1)
+        args_start = call_match.start(2)
+        depth = 0
+        for j in range(args_start, len(text)):
+            if text[j] == '{':
+                depth += 1
+            elif text[j] == '}':
+                depth -= 1
+            if depth == 0:
+                try:
+                    args = json.loads(text[args_start:j + 1])
+                    return {"tool": tool_name, "args": args}
+                except (json.JSONDecodeError, ValueError):
+                    pass
                 break
 
     return None
