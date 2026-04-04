@@ -35,6 +35,12 @@ readline.parse_and_bind(r'"\e[1;3C": forward-word')
 readline.parse_and_bind(r'"\e[3D": backward-word')
 readline.parse_and_bind(r'"\e[3C": forward-word')
 
+# Ctrl+O expands the last truncated tool result.
+# readline inserts the literal text "expand" and submits it — main.py handles it.
+readline.parse_and_bind(r'"\C-o": "expand\n"')
+
+_last_tool_result: str = ""
+
 BANNER = """[bold white]LLM Harness[/bold white] — a minimal agent loop
 
 [dim]How it works:[/dim]
@@ -66,14 +72,28 @@ def print_tool_call(tool_name: str, args: dict):
 
 
 def print_tool_result(result: str):
-    """Display the result returned by a tool (truncated if long)."""
+    """Display the result returned by a tool (truncated if long).
+
+    Stores the full result so Ctrl+O can expand it later.
+    """
+    global _last_tool_result
+    _last_tool_result = result
+
     if len(result) < 500:
         display = result
     else:
         truncated_chars = len(result) - 500
         truncated_lines = result[500:].count('\n')
-        display = result[:500] + f"\n[dim]... (truncated — {truncated_lines} more lines, {truncated_chars} chars)[/dim]"
+        display = result[:500] + f"\n[dim]... (truncated — {truncated_lines} more lines, {truncated_chars} chars — press Ctrl+O to expand)[/dim]"
     console.print(f"[dim]  → {display}[/dim]")
+
+
+def expand_last_tool_result():
+    """Print the full last tool result (invoked by the Ctrl+O expand command)."""
+    if _last_tool_result:
+        console.print(f"[dim]  → {_last_tool_result}[/dim]")
+    else:
+        console.print("[dim]  (no tool result to expand)[/dim]")
 
 
 def confirm_tool(tool_name: str, args: dict) -> bool:

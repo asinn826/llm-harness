@@ -180,7 +180,8 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
             received_filter = "AND m.is_from_me = 0" if received_only else ""
             cursor.execute(f"""
                 SELECT DISTINCT m.text, m.attributedBody, m.is_from_me, m.date,
-                       c.display_name, c.chat_identifier, h.id AS sender_handle
+                       c.display_name, c.chat_identifier, h.id AS sender_handle,
+                       m.cache_has_attachments
                 FROM message m
                 JOIN chat_message_join cmj ON m.rowid = cmj.message_id
                 JOIN chat c ON cmj.chat_id = c.rowid
@@ -225,10 +226,13 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
             threads: dict[str, list[str]] = defaultdict(list)
             thread_order: list[str] = []  # preserves first-seen order
 
-            for text, attributed_body, is_from_me, date, display_name, chat_id, sender_handle in reversed(rows):
+            for text, attributed_body, is_from_me, date, display_name, chat_id, sender_handle, has_attachments in reversed(rows):
                 body = decode_message_text(text, attributed_body)
                 if not body:
-                    continue
+                    if has_attachments:
+                        body = "[image]"
+                    else:
+                        continue
                 ts = (date / 1e9 if date > 1e12 else date) + APPLE_EPOCH
                 dt = datetime.fromtimestamp(ts).strftime("%b %d %H:%M")
                 if is_from_me:
@@ -267,7 +271,7 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
                 is_group = len(participants) > 1
                 digits = _last10(chat_id or "")
                 display_name = next(
-                    (dn for _, _, _, _, dn, cid, _ in rows if cid == chat_id and dn), None
+                    (dn for _, _, _, _, dn, cid, _, _ in rows if cid == chat_id and dn), None
                 )
                 label = name_map.get(digits) or display_name or ("Group Chat" if is_group else chat_id)
 

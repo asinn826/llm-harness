@@ -19,7 +19,7 @@ from harness import build_system_prompt, run_conversation_turn
 from tools import TOOLS
 from cli import (
     console, print_banner, print_assistant, print_tool_result,
-    confirm_tool, get_user_input, thinking_spinner,
+    confirm_tool, get_user_input, thinking_spinner, expand_last_tool_result,
 )
 
 _USE_MLX = torch.backends.mps.is_available()
@@ -204,6 +204,10 @@ def main():
             break
 
         if not user_input:
+            continue
+
+        if user_input.lower() == "expand":
+            expand_last_tool_result()
             continue
 
         response = run_conversation_turn(
