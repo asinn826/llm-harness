@@ -20,7 +20,6 @@ from tools import TOOLS
 from cli import (
     console, print_banner, print_assistant, print_tool_result,
     confirm_tool, get_user_input, thinking_spinner, expand_last_tool_result,
-    check_for_expand_hotkey,
 )
 
 _USE_MLX = torch.backends.mps.is_available()
@@ -221,9 +220,6 @@ def main():
         )
 
         print_assistant(response)
-        # Brief window to intercept Ctrl+O before the prompt appears.
-        # Any other keypress is stuffed back into readline's buffer so it isn't lost.
-        check_for_expand_hotkey()
 
 
 if __name__ == "__main__":

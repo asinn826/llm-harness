@@ -6,12 +6,8 @@ interface without touching any core logic. The harness calls back into here via
 the confirm_fn parameter.
 """
 import atexit
-import os
 import readline
-import select
 import sys
-import termios
-import tty
 from pathlib import Path
 from typing import Optional
 from rich.console import Console
@@ -40,12 +36,12 @@ readline.parse_and_bind(r'"\e[1;3C": forward-word')
 readline.parse_and_bind(r'"\e[3D": backward-word')
 readline.parse_and_bind(r'"\e[3C": forward-word')
 
-# Ctrl+O expands the last truncated tool result.
-# macOS uses libedit (not GNU readline), which has different parse_and_bind syntax.
-# Detect and apply the right binding for each backend.
+# Ctrl+O expands the last truncated tool result at any point during input.
+# macOS uses libedit (not GNU readline), which requires different bind syntax.
 _using_libedit = "libedit" in (readline.__doc__ or "")
 if _using_libedit:
-    readline.parse_and_bind("bind ^O 'expand\n'")
+    # libedit: bind -s binds a key to a literal string; \n submits the line
+    readline.parse_and_bind(r"bind -s '^O' 'expand\n'")
 else:
     readline.parse_and_bind(r'"\C-o": "expand\n"')
 
@@ -72,7 +68,6 @@ def print_banner():
 def print_assistant(message: str):
     """Display the assistant's final plain-text response."""
     console.print(f"\n[dim]→[/dim] {message}\n")
-
 
 
 def print_tool_call(tool_name: str, args: dict):
@@ -104,39 +99,6 @@ def expand_last_tool_result():
         console.print(f"[dim]  → {_last_tool_result}[/dim]")
     else:
         console.print("[dim]  (no tool result to expand)[/dim]")
-
-
-def check_for_expand_hotkey():
-    """After printing a response, poll stdin for Ctrl+O (0x0F).
-
-    Only activates when the last tool result was truncated. Shows a visible
-    hint, switches to raw mode, and waits indefinitely. Ctrl+O expands;
-    any other key is stuffed back into readline so it isn't lost.
-    """
-    if not sys.stdin.isatty() or not _last_tool_result or len(_last_tool_result) < 500:
-        return
-    fd = sys.stdin.fileno()
-    old_settings = termios.tcgetattr(fd)
-    sys.stdout.write("\033[2m  (Ctrl+O to expand tool output)\033[0m")
-    sys.stdout.flush()
-    try:
-        tty.setraw(fd)
-        ch = os.read(fd, 1)
-        # Clear the hint line
-        sys.stdout.write("\r\033[K")
-        sys.stdout.flush()
-        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-        if ch == b'\x0f':  # Ctrl+O
-            expand_last_tool_result()
-        else:
-            readline.stuff_char(ch[0])
-    except Exception:
-        pass
-    finally:
-        try:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-        except Exception:
-            pass
 
 
 def confirm_tool(tool_name: str, args: dict) -> bool:

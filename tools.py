@@ -181,7 +181,8 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
             cursor.execute(f"""
                 SELECT m.text, m.attributedBody, m.is_from_me, m.date,
                        c.display_name, c.chat_identifier, h.id AS sender_handle,
-                       m.cache_has_attachments, m.associated_message_type
+                       m.cache_has_attachments, m.associated_message_type,
+                       m.associated_message_guid
                 FROM message m
                 JOIN chat_message_join cmj ON m.rowid = cmj.message_id
                 JOIN chat c ON cmj.chat_id = c.rowid
@@ -232,7 +233,38 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
                 2003: "laughed at", 2004: "emphasized", 2005: "questioned",
             }
 
-            for text, attributed_body, is_from_me, date, display_name, chat_id, sender_handle, has_attachments, reaction_type in reversed(rows):
+            # Cache source message lookups so repeated reactions to the same
+            # message don't hit the DB multiple times.
+            _source_cache: dict = {}
+
+            def fetch_source_body(guid: str):
+                if guid in _source_cache:
+                    return _source_cache[guid]
+                cursor.execute("""
+                    SELECT m.text, m.attributedBody, m.is_from_me,
+                           h.id, m.cache_has_attachments
+                    FROM message m
+                    LEFT JOIN handle h ON m.handle_id = h.rowid
+                    WHERE m.guid = ?
+                """, [guid])
+                row = cursor.fetchone()
+                if not row:
+                    _source_cache[guid] = None
+                    return None
+                src_text, src_attr, src_from_me, src_handle, src_has_atts = row
+                src_body = decode_message_text(src_text, src_attr)
+                if not src_body:
+                    src_body = "[image]" if src_has_atts else None
+                if src_body:
+                    handle_digits = _last10(src_handle or "")
+                    src_sender = "You" if src_from_me else (name_map.get(handle_digits) or src_handle or "them")
+                    result = f"{src_sender}: {src_body}"
+                else:
+                    result = None
+                _source_cache[guid] = result
+                return result
+
+            for text, attributed_body, is_from_me, date, display_name, chat_id, sender_handle, has_attachments, reaction_type, associated_guid in reversed(rows):
                 body = decode_message_text(text, attributed_body)
                 if not body:
                     if has_attachments:
@@ -242,8 +274,18 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
 
                 # Tag tapback reactions so the model understands they're reactions,
                 # not standalone messages — but keep them so "who reacted?" works.
+                # Include the source message so context is clear even if the original
+                # message isn't in the output window.
                 if reaction_type and reaction_type in REACTION_LABELS:
-                    body = f"[reacted: {REACTION_LABELS[reaction_type]}] {body}"
+                    label = REACTION_LABELS[reaction_type]
+                    if associated_guid:
+                        src = fetch_source_body(associated_guid)
+                        if src:
+                            body = f"[reacted: {label} to '{src}'] {body}"
+                        else:
+                            body = f"[reacted: {label}] {body}"
+                    else:
+                        body = f"[reacted: {label}] {body}"
                 ts = (date / 1e9 if date > 1e12 else date) + APPLE_EPOCH
                 dt = datetime.fromtimestamp(ts).strftime("%b %d %H:%M")
                 if is_from_me:
@@ -282,7 +324,7 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
                 is_group = len(participants) > 1
                 digits = _last10(chat_id or "")
                 display_name = next(
-                    (dn for _, _, _, _, dn, cid, _, _, _ in rows if cid == chat_id and dn), None
+                    (dn for _, _, _, _, dn, cid, _, _, _, _ in rows if cid == chat_id and dn), None
                 )
                 label = name_map.get(digits) or display_name or ("Group Chat" if is_group else chat_id)
 
