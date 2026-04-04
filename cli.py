@@ -11,15 +11,14 @@ import readline
 import select
 import sys
 import termios
+import threading
 import tty
 from pathlib import Path
 from typing import Optional
 from rich.console import Console
 from rich.panel import Panel
-from rich.prompt import Prompt, Confirm
 from rich.spinner import Spinner
 from rich.live import Live
-from rich.text import Text
 
 console = Console()
 
@@ -30,26 +29,6 @@ except FileNotFoundError:
     pass
 readline.set_history_length(500)
 atexit.register(readline.write_history_file, _HISTORY_FILE)
-
-# Word-by-word navigation with Option+Left/Right.
-# Terminals send different sequences depending on config:
-#   \e[1;3D / \e[1;3C  — macOS Terminal.app with "Use Option as Meta key"
-#   \e[3D   / \e[3C    — some other terminals
-readline.parse_and_bind(r'"\e[1;3D": backward-word')
-readline.parse_and_bind(r'"\e[1;3C": forward-word')
-readline.parse_and_bind(r'"\e[3D": backward-word')
-readline.parse_and_bind(r'"\e[3C": forward-word')
-
-# Ctrl+O opens the tool-output overlay directly (no visible "expand" text).
-# The macro inserts an invisible sentinel (\x1c = File Separator) and submits.
-# get_user_input() intercepts the sentinel, opens the overlay, and re-prompts
-# with any in-progress text restored.
-_CTRL_O_SENTINEL = '\x1c'
-_using_libedit = "libedit" in (readline.__doc__ or "")
-if _using_libedit:
-    readline.parse_and_bind("bind -s '^O' '\\034\\n'")
-else:
-    readline.parse_and_bind('"\\C-o": "\\034\\C-m"')
 
 _last_tool_result: str = ""
 
@@ -191,65 +170,448 @@ def confirm_tool(tool_name: str, args: dict) -> bool:
     return response in ("", "y")
 
 
-_pending_input: str = ""
+# ── Raw input with native Ctrl+O support ────────────────────────────────────
+# Replaces Python's input() so we can intercept Ctrl+O (0x0F) directly in
+# cbreak mode. Handles line editing (backspace, arrows, home/end, kill-line,
+# kill-word) and history (up/down) using readline's history API. This avoids
+# fighting with libedit's `ed-sequence-lead-in` binding on macOS.
 
 
-def _restore_input_hook():
-    """Pre-input hook: restore text the user was typing before Ctrl+O."""
-    global _pending_input
-    if _pending_input:
-        readline.insert_text(_pending_input)
-        readline.redisplay()
-        _pending_input = ""
-    readline.set_pre_input_hook(None)
+def _read_char(fd: int) -> bytes:
+    """Read one complete character from fd, handling UTF-8 multi-byte sequences."""
+    b = os.read(fd, 1)
+    if not b:
+        return b
+    first = b[0]
+    if first & 0x80 == 0:
+        return b
+    elif first & 0xE0 == 0xC0:
+        return b + os.read(fd, 1)
+    elif first & 0xF0 == 0xE0:
+        return b + os.read(fd, 2)
+    elif first & 0xF8 == 0xF0:
+        return b + os.read(fd, 3)
+    return b
+
+
+_PROMPT_COLS = 2  # visible width of "❯ " (emoji + space)
+
+
+def _redraw_line(buf: list, pos: int, old_len: int):
+    """Clear the current line content and redraw buf, leaving cursor at pos."""
+    sys.stdout.write(f'\r\033[{_PROMPT_COLS}C')  # move past prompt
+    text = ''.join(buf)
+    padding = max(0, old_len - len(buf))
+    sys.stdout.write(text + ' ' * padding)
+    back = len(buf) + padding - pos
+    if back > 0:
+        sys.stdout.write(f'\033[{back}D')
+    sys.stdout.flush()
 
 
 def get_user_input() -> Optional[str]:
-    """Prompt the user for input. Returns None on EOF/interrupt, empty string on blank input.
+    """Prompt the user for input with native Ctrl+O support.
 
-    Intercepts Ctrl+O (via an invisible sentinel injected by a readline macro):
-    opens the tool-output overlay, then re-prompts with any in-progress text restored.
+    Uses cbreak mode for character-at-a-time reading so Ctrl+O (0x0F)
+    is intercepted directly — no readline macro needed. Supports basic
+    line editing, history navigation, and Option+arrow word movement.
+    Returns None on EOF/interrupt, empty string on blank input.
     """
-    global _pending_input
+    if not sys.stdin.isatty():
+        try:
+            return input("❯ ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return None
+
+    fd = sys.stdin.fileno()
+    old = termios.tcgetattr(fd)
+
+    print()
+    sys.stdout.write("\033[1;38;5;214m❯\033[0m ")
+    sys.stdout.flush()
+
+    buf: list[str] = []
+    pos = 0
+    hist_total = readline.get_current_history_length()
+    hist_idx = hist_total  # one past the last entry = "new line"
+    saved_line = ""
+
     try:
+        tty.setcbreak(fd)
         while True:
-            print()  # blank line before prompt — kept outside input() so readline ignores it
-            text = input("\001\033[1;38;5;214m\002❯\001\033[0m\002 ")
+            ch = _read_char(fd)
+            if not ch:
+                raise EOFError
 
-            if _CTRL_O_SENTINEL in text:
-                # Ctrl+O was pressed — extract any text the user had been typing
-                user_text = text.replace(_CTRL_O_SENTINEL, '').strip()
-
-                # Remove the sentinel-contaminated entry from history
-                length = readline.get_current_history_length()
-                if length > 0:
-                    readline.remove_history_item(length - 1)
-
-                # Open the overlay
+            # ── Ctrl+O: open overlay ─────────────────────────────────────
+            if ch == b'\x0f':
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
                 expand_last_tool_result()
-
-                # Restore in-progress text on the next prompt
-                if user_text:
-                    _pending_input = user_text
-                    readline.set_pre_input_hook(_restore_input_hook)
+                # Redraw prompt + buffer after overlay closes
+                sys.stdout.write("\033[1;38;5;214m❯\033[0m ")
+                sys.stdout.write(''.join(buf))
+                if pos < len(buf):
+                    sys.stdout.write(f'\033[{len(buf) - pos}D')
+                sys.stdout.flush()
+                tty.setcbreak(fd)
                 continue
 
-            text = text.strip()
-            # Prune throwaway entries from history so they don't pollute up-arrow navigation
-            if not text or text.lower() == "quit":
-                length = readline.get_current_history_length()
-                if length > 0:
-                    readline.remove_history_item(length - 1)
-            return text
+            # ── Enter ────────────────────────────────────────────────────
+            if ch in (b'\r', b'\n'):
+                sys.stdout.write('\r\n')
+                sys.stdout.flush()
+                break
+
+            # ── Ctrl+C ───────────────────────────────────────────────────
+            if ch == b'\x03':
+                sys.stdout.write('^C\r\n')
+                sys.stdout.flush()
+                raise KeyboardInterrupt
+
+            # ── Ctrl+D ───────────────────────────────────────────────────
+            if ch == b'\x04':
+                if not buf:
+                    raise EOFError
+                continue
+
+            # ── Backspace ────────────────────────────────────────────────
+            if ch in (b'\x7f', b'\x08'):
+                if pos > 0:
+                    old_len = len(buf)
+                    buf.pop(pos - 1)
+                    pos -= 1
+                    _redraw_line(buf, pos, old_len)
+                continue
+
+            # ── Ctrl+A (home) ────────────────────────────────────────────
+            if ch == b'\x01':
+                if pos > 0:
+                    sys.stdout.write(f'\033[{pos}D')
+                    sys.stdout.flush()
+                    pos = 0
+                continue
+
+            # ── Ctrl+E (end) ─────────────────────────────────────────────
+            if ch == b'\x05':
+                if pos < len(buf):
+                    sys.stdout.write(f'\033[{len(buf) - pos}C')
+                    sys.stdout.flush()
+                    pos = len(buf)
+                continue
+
+            # ── Ctrl+K (kill to end of line) ─────────────────────────────
+            if ch == b'\x0b':
+                if pos < len(buf):
+                    n = len(buf) - pos
+                    buf[pos:] = []
+                    sys.stdout.write(' ' * n + f'\033[{n}D')
+                    sys.stdout.flush()
+                continue
+
+            # ── Ctrl+U (kill entire line) ────────────────────────────────
+            if ch == b'\x15':
+                if buf:
+                    old_len = len(buf)
+                    buf.clear()
+                    pos = 0
+                    _redraw_line(buf, pos, old_len)
+                continue
+
+            # ── Ctrl+W (delete word back) ────────────────────────────────
+            if ch == b'\x17':
+                if pos > 0:
+                    old_len = len(buf)
+                    new_pos = pos - 1
+                    while new_pos > 0 and buf[new_pos - 1] == ' ':
+                        new_pos -= 1
+                    while new_pos > 0 and buf[new_pos - 1] != ' ':
+                        new_pos -= 1
+                    del buf[new_pos:pos]
+                    pos = new_pos
+                    _redraw_line(buf, pos, old_len)
+                continue
+
+            # ── Ctrl+L (clear screen) ────────────────────────────────────
+            if ch == b'\x0c':
+                sys.stdout.write('\033[2J\033[H')
+                sys.stdout.write("\033[1;38;5;214m❯\033[0m ")
+                sys.stdout.write(''.join(buf))
+                if pos < len(buf):
+                    sys.stdout.write(f'\033[{len(buf) - pos}D')
+                sys.stdout.flush()
+                continue
+
+            # ── Escape sequences (arrows, Option+arrows, etc.) ──────────
+            if ch == b'\x1b':
+                r, _, _ = select.select([fd], [], [], 0.05)
+                if not r:
+                    continue  # bare Esc — ignore
+                seq = os.read(fd, 1)
+                if seq == b'[':
+                    code = os.read(fd, 1)
+
+                    # Up arrow — previous history
+                    if code == b'A':
+                        if hist_idx > 0:
+                            if hist_idx == hist_total:
+                                saved_line = ''.join(buf)
+                            hist_idx -= 1
+                            item = readline.get_history_item(hist_idx + 1) or ""
+                            old_len = len(buf)
+                            buf = list(item)
+                            pos = len(buf)
+                            _redraw_line(buf, pos, old_len)
+                        continue
+
+                    # Down arrow — next history
+                    if code == b'B':
+                        if hist_idx < hist_total:
+                            hist_idx += 1
+                            item = saved_line if hist_idx == hist_total else (readline.get_history_item(hist_idx + 1) or "")
+                            old_len = len(buf)
+                            buf = list(item)
+                            pos = len(buf)
+                            _redraw_line(buf, pos, old_len)
+                        continue
+
+                    # Right arrow
+                    if code == b'C':
+                        if pos < len(buf):
+                            sys.stdout.write('\033[C')
+                            sys.stdout.flush()
+                            pos += 1
+                        continue
+
+                    # Left arrow
+                    if code == b'D':
+                        if pos > 0:
+                            sys.stdout.write('\033[D')
+                            sys.stdout.flush()
+                            pos -= 1
+                        continue
+
+                    # Home (\033[H)
+                    if code == b'H':
+                        if pos > 0:
+                            sys.stdout.write(f'\033[{pos}D')
+                            sys.stdout.flush()
+                            pos = 0
+                        continue
+
+                    # End (\033[F)
+                    if code == b'F':
+                        if pos < len(buf):
+                            sys.stdout.write(f'\033[{len(buf) - pos}C')
+                            sys.stdout.flush()
+                            pos = len(buf)
+                        continue
+
+                    # Delete key (\033[3~)
+                    if code == b'3':
+                        r2, _, _ = select.select([fd], [], [], 0.05)
+                        if r2:
+                            os.read(fd, 1)  # consume ~
+                        if pos < len(buf):
+                            old_len = len(buf)
+                            buf.pop(pos)
+                            _redraw_line(buf, pos, old_len)
+                        continue
+
+                    # Option+Arrow / extended sequences (\033[1;3D etc.)
+                    if code == b'1':
+                        rest = b''
+                        while True:
+                            r2, _, _ = select.select([fd], [], [], 0.05)
+                            if not r2:
+                                break
+                            b = os.read(fd, 1)
+                            rest += b
+                            if b.isalpha() or b == b'~':
+                                break
+                        if rest == b';3D':  # Option+Left (word back)
+                            new_pos = pos
+                            while new_pos > 0 and buf[new_pos - 1] == ' ':
+                                new_pos -= 1
+                            while new_pos > 0 and buf[new_pos - 1] != ' ':
+                                new_pos -= 1
+                            if new_pos < pos:
+                                sys.stdout.write(f'\033[{pos - new_pos}D')
+                                sys.stdout.flush()
+                                pos = new_pos
+                        elif rest == b';3C':  # Option+Right (word forward)
+                            new_pos = pos
+                            while new_pos < len(buf) and buf[new_pos] != ' ':
+                                new_pos += 1
+                            while new_pos < len(buf) and buf[new_pos] == ' ':
+                                new_pos += 1
+                            if new_pos > pos:
+                                sys.stdout.write(f'\033[{new_pos - pos}C')
+                                sys.stdout.flush()
+                                pos = new_pos
+                        continue
+
+                    # Consume any remaining bytes in unknown sequences
+                    while True:
+                        r2, _, _ = select.select([fd], [], [], 0.02)
+                        if not r2:
+                            break
+                        os.read(fd, 1)
+                    continue
+
+                elif seq == b'O':
+                    # \033O sequences (some terminals use these for arrows)
+                    code = os.read(fd, 1)
+                    # Just consume — covered by \033[ above for most terminals
+                    continue
+
+                # Option key on macOS can send \033 + char (meta prefix)
+                # \033b = word back, \033f = word forward
+                if seq == b'b':  # Meta+b (word back)
+                    new_pos = pos
+                    while new_pos > 0 and buf[new_pos - 1] == ' ':
+                        new_pos -= 1
+                    while new_pos > 0 and buf[new_pos - 1] != ' ':
+                        new_pos -= 1
+                    if new_pos < pos:
+                        sys.stdout.write(f'\033[{pos - new_pos}D')
+                        sys.stdout.flush()
+                        pos = new_pos
+                    continue
+
+                if seq == b'f':  # Meta+f (word forward)
+                    new_pos = pos
+                    while new_pos < len(buf) and buf[new_pos] != ' ':
+                        new_pos += 1
+                    while new_pos < len(buf) and buf[new_pos] == ' ':
+                        new_pos += 1
+                    if new_pos > pos:
+                        sys.stdout.write(f'\033[{new_pos - pos}C')
+                        sys.stdout.flush()
+                        pos = new_pos
+                    continue
+
+                if seq == b'd':  # Meta+d (delete word forward)
+                    if pos < len(buf):
+                        old_len = len(buf)
+                        new_pos = pos
+                        while new_pos < len(buf) and buf[new_pos] == ' ':
+                            new_pos += 1
+                        while new_pos < len(buf) and buf[new_pos] != ' ':
+                            new_pos += 1
+                        del buf[pos:new_pos]
+                        _redraw_line(buf, pos, old_len)
+                    continue
+
+                continue  # unknown escape — ignore
+
+            # ── Printable characters ─────────────────────────────────────
+            try:
+                char = ch.decode('utf-8')
+            except UnicodeDecodeError:
+                continue
+
+            if not char.isprintable():
+                continue
+
+            buf.insert(pos, char)
+            pos += 1
+            if pos == len(buf):
+                sys.stdout.write(char)
+            else:
+                sys.stdout.write(''.join(buf[pos - 1:]))
+                sys.stdout.write(f'\033[{len(buf) - pos}D')
+            sys.stdout.flush()
+
     except (EOFError, KeyboardInterrupt):
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
         return None
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    text = ''.join(buf).strip()
+    if text and text.lower() != "quit":
+        readline.add_history(text)
+    return text
 
 
-def thinking_spinner(label: str = "Thinking..."):
-    """Return a Live context manager that shows a spinner while the model generates.
+# ── Thinking spinner with Ctrl+O support ────────────────────────────────────
+
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def thinking_spinner(fn=None, label: str = "Thinking..."):
+    """Run fn with a spinner, or return a simple context manager.
+
+    If fn is a callable: run it in a background thread while the main thread
+    animates the spinner and monitors stdin for Ctrl+O. Returns fn's result.
+
+    If fn is a string: treat it as the label and return a context manager.
+    If fn is None: return a context manager with the default label.
 
     Usage:
-        with thinking_spinner():
-            result = model_fn(conversation)
+        # Context manager (model loading — no Ctrl+O support needed):
+        with thinking_spinner("Loading model..."):
+            model = load(model_id)
+
+        # Threaded (model generation — Ctrl+O works during inference):
+        result = thinking_spinner(fn=lambda: generate(prompt), label="Thinking...")
     """
-    return Live(Spinner("dots", text=f"[dim]{label}[/dim]"), console=console, transient=True)
+    if isinstance(fn, str):
+        label = fn
+        fn = None
+    if fn is None:
+        return Live(Spinner("dots", text=f"[dim]{label}[/dim]"), console=console, transient=True)
+    return _run_with_spinner(fn, label)
+
+
+def _run_with_spinner(fn, label: str):
+    """Execute fn in a background thread, animate spinner + handle Ctrl+O."""
+    result_box = [None]
+    error_box = [None]
+
+    def worker():
+        try:
+            result_box[0] = fn()
+        except Exception as e:
+            error_box[0] = e
+
+    thread = threading.Thread(target=worker, daemon=True)
+    thread.start()
+
+    is_tty = sys.stdin.isatty()
+    fd = sys.stdin.fileno() if is_tty else -1
+    old = termios.tcgetattr(fd) if is_tty else None
+
+    frame = 0
+    try:
+        if is_tty:
+            tty.setcbreak(fd)
+        while thread.is_alive():
+            sys.stdout.write(f"\r\033[2m{_SPINNER_FRAMES[frame % len(_SPINNER_FRAMES)]} {label}\033[0m")
+            sys.stdout.flush()
+            frame += 1
+
+            if is_tty:
+                r, _, _ = select.select([fd], [], [], 0.08)
+                if r:
+                    ch = os.read(fd, 1)
+                    if ch == b'\x0f':  # Ctrl+O
+                        sys.stdout.write('\r\033[K')
+                        sys.stdout.flush()
+                        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                        expand_last_tool_result()
+                        tty.setcbreak(fd)
+                    # Non-Ctrl+O keystrokes during thinking are silently discarded
+            else:
+                thread.join(timeout=0.08)
+
+        sys.stdout.write('\r\033[K')
+        sys.stdout.flush()
+    finally:
+        if is_tty:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+
+    thread.join()
+    if error_box[0] is not None:
+        raise error_box[0]
+    return result_box[0]

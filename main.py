@@ -60,9 +60,9 @@ def make_model_fn_mlx(tokenizer, model, system_prompt: str):
                     lines.append(f"{m['role'].upper()}: {m['content']}")
             prompt = "\n".join(lines) + "\nASSISTANT:"
 
-        with thinking_spinner():
-            response = generate(model, tokenizer, prompt=prompt, max_tokens=512, verbose=False)
-
+        response = thinking_spinner(
+            fn=lambda: generate(model, tokenizer, prompt=prompt, max_tokens=512, verbose=False),
+        )
         return response.strip()
 
     return model_fn
@@ -155,14 +155,11 @@ def make_model_fn_hf(processor, model, system_prompt: str):
 
         input_len = inputs["input_ids"].shape[-1]
 
-        with thinking_spinner():
+        def _generate():
             with torch.no_grad():
-                output = model.generate(
-                    **inputs,
-                    max_new_tokens=512,
-                    do_sample=False,
-                )
+                return model.generate(**inputs, max_new_tokens=512, do_sample=False)
 
+        output = thinking_spinner(fn=_generate)
         return processor.decode(output[0][input_len:], skip_special_tokens=True).strip()
 
     return model_fn
