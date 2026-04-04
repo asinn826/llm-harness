@@ -40,14 +40,16 @@ readline.parse_and_bind(r'"\e[1;3C": forward-word')
 readline.parse_and_bind(r'"\e[3D": backward-word')
 readline.parse_and_bind(r'"\e[3C": forward-word')
 
-# Ctrl+O expands the last truncated tool result at any point during input.
-# macOS uses libedit (not GNU readline), which requires different bind syntax.
+# Ctrl+O opens the tool-output overlay directly (no visible "expand" text).
+# The macro inserts an invisible sentinel (\x1c = File Separator) and submits.
+# get_user_input() intercepts the sentinel, opens the overlay, and re-prompts
+# with any in-progress text restored.
+_CTRL_O_SENTINEL = '\x1c'
 _using_libedit = "libedit" in (readline.__doc__ or "")
 if _using_libedit:
-    # libedit: bind -s binds a key to a literal string; \n submits the line
-    readline.parse_and_bind(r"bind -s '^O' 'expand\n'")
+    readline.parse_and_bind("bind -s '^O' '\\034\\n'")
 else:
-    readline.parse_and_bind(r'"\C-o": "expand\n"')
+    readline.parse_and_bind('"\\C-o": "\\034\\C-m"')
 
 _last_tool_result: str = ""
 
@@ -189,17 +191,56 @@ def confirm_tool(tool_name: str, args: dict) -> bool:
     return response in ("", "y")
 
 
+_pending_input: str = ""
+
+
+def _restore_input_hook():
+    """Pre-input hook: restore text the user was typing before Ctrl+O."""
+    global _pending_input
+    if _pending_input:
+        readline.insert_text(_pending_input)
+        readline.redisplay()
+        _pending_input = ""
+    readline.set_pre_input_hook(None)
+
+
 def get_user_input() -> Optional[str]:
-    """Prompt the user for input. Returns None on EOF/interrupt, empty string on blank input."""
+    """Prompt the user for input. Returns None on EOF/interrupt, empty string on blank input.
+
+    Intercepts Ctrl+O (via an invisible sentinel injected by a readline macro):
+    opens the tool-output overlay, then re-prompts with any in-progress text restored.
+    """
+    global _pending_input
     try:
-        print()  # blank line before prompt — kept outside input() so readline ignores it
-        text = input("\001\033[1;38;5;214m\002❯\001\033[0m\002 ").strip()
-        # Prune throwaway entries from history so they don't pollute up-arrow navigation
-        if not text or text.lower() == "quit":
-            length = readline.get_current_history_length()
-            if length > 0:
-                readline.remove_history_item(length - 1)
-        return text
+        while True:
+            print()  # blank line before prompt — kept outside input() so readline ignores it
+            text = input("\001\033[1;38;5;214m\002❯\001\033[0m\002 ")
+
+            if _CTRL_O_SENTINEL in text:
+                # Ctrl+O was pressed — extract any text the user had been typing
+                user_text = text.replace(_CTRL_O_SENTINEL, '').strip()
+
+                # Remove the sentinel-contaminated entry from history
+                length = readline.get_current_history_length()
+                if length > 0:
+                    readline.remove_history_item(length - 1)
+
+                # Open the overlay
+                expand_last_tool_result()
+
+                # Restore in-progress text on the next prompt
+                if user_text:
+                    _pending_input = user_text
+                    readline.set_pre_input_hook(_restore_input_hook)
+                continue
+
+            text = text.strip()
+            # Prune throwaway entries from history so they don't pollute up-arrow navigation
+            if not text or text.lower() == "quit":
+                length = readline.get_current_history_length()
+                if length > 0:
+                    readline.remove_history_item(length - 1)
+            return text
     except (EOFError, KeyboardInterrupt):
         return None
 
