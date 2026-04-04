@@ -41,8 +41,13 @@ readline.parse_and_bind(r'"\e[3D": backward-word')
 readline.parse_and_bind(r'"\e[3C": forward-word')
 
 # Ctrl+O expands the last truncated tool result.
-# readline inserts the literal text "expand" and submits it — main.py handles it.
-readline.parse_and_bind(r'"\C-o": "expand\n"')
+# macOS uses libedit (not GNU readline), which has different parse_and_bind syntax.
+# Detect and apply the right binding for each backend.
+_using_libedit = "libedit" in (readline.__doc__ or "")
+if _using_libedit:
+    readline.parse_and_bind("bind ^O 'expand\n'")
+else:
+    readline.parse_and_bind(r'"\C-o": "expand\n"')
 
 _last_tool_result: str = ""
 
@@ -101,30 +106,30 @@ def expand_last_tool_result():
         console.print("[dim]  (no tool result to expand)[/dim]")
 
 
-def check_for_expand_hotkey(timeout: float = 2.0):
-    """After printing a response, briefly poll stdin for Ctrl+O (0x0F).
+def check_for_expand_hotkey():
+    """After printing a response, poll stdin for Ctrl+O (0x0F).
 
-    Switches to raw mode for `timeout` seconds. If Ctrl+O is pressed, expands
-    the last tool result in place. Any other key is pushed back via the
-    readline pre-input buffer so it isn't lost.
+    Only activates when the last tool result was truncated. Shows a visible
+    hint, switches to raw mode, and waits indefinitely. Ctrl+O expands;
+    any other key is stuffed back into readline so it isn't lost.
     """
-    if not sys.stdin.isatty():
+    if not sys.stdin.isatty() or not _last_tool_result or len(_last_tool_result) < 500:
         return
     fd = sys.stdin.fileno()
     old_settings = termios.tcgetattr(fd)
+    sys.stdout.write("\033[2m  (Ctrl+O to expand tool output)\033[0m")
+    sys.stdout.flush()
     try:
         tty.setraw(fd)
-        ready, _, _ = select.select([sys.stdin], [], [], timeout)
-        if ready:
-            ch = os.read(fd, 1)
-            if ch == b'\x0f':  # Ctrl+O
-                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
-                expand_last_tool_result()
-                return
-            # Not Ctrl+O — restore and stuff the char back via readline
-            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        ch = os.read(fd, 1)
+        # Clear the hint line
+        sys.stdout.write("\r\033[K")
+        sys.stdout.flush()
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        if ch == b'\x0f':  # Ctrl+O
+            expand_last_tool_result()
+        else:
             readline.stuff_char(ch[0])
-            return
     except Exception:
         pass
     finally:

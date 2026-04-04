@@ -179,7 +179,7 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
             # with the chat_identifier as the sender label for received messages.
             received_filter = "AND m.is_from_me = 0" if received_only else ""
             cursor.execute(f"""
-                SELECT DISTINCT m.text, m.attributedBody, m.is_from_me, m.date,
+                SELECT m.text, m.attributedBody, m.is_from_me, m.date,
                        c.display_name, c.chat_identifier, h.id AS sender_handle,
                        m.cache_has_attachments, m.associated_message_type
                 FROM message m
@@ -187,6 +187,7 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
                 JOIN chat c ON cmj.chat_id = c.rowid
                 LEFT JOIN handle h ON m.handle_id = h.rowid
                 WHERE 1=1 {received_filter}
+                GROUP BY m.rowid
                 ORDER BY m.date DESC LIMIT ?
             """, [limit])
             rows = cursor.fetchall()
