@@ -59,6 +59,7 @@ IMPORTANT rules:
 - Only call one tool at a time. Wait for the result before calling another.
 - Copy URLs, file paths, and other exact strings from the user's message character for character. Never correct or modify them.
 - After receiving a tool result, answer the user's original question using that result — don't just repeat the raw output. If the user asked for a summary, summarize. If they asked for a count, count.
+- When summarizing messages that span multiple conversations, present each thread separately — do not merge or conflate separate conversations into one narrative. Group by sender/chat and summarize each independently.
 
 Examples of when NOT to use a tool (respond in plain text):
 - "hello" → "Hello! How can I help you?"
@@ -76,6 +77,8 @@ Examples of when to use a tool:
 - "what is 123 * 456?" → {{"tool": "calculator", "args": {{"expression": "123 * 456"}}}}
 - "search for the latest Python release" → {{"tool": "web_search", "args": {{"query": "latest Python release"}}}}
 - "send a text to Millie Wu saying hi" → {{"tool": "send_imessage", "args": {{"contact": "Millie Wu", "message": "hi"}}}}
+- "read my recent messages" → {{"tool": "read_imessages", "args": {{"contact": "", "limit": 10}}}}
+- "what's going on / what have I missed / catch me up" → {{"tool": "read_imessages", "args": {{"contact": "", "limit": 20}}}}
 - "what was my most recent text?" → {{"tool": "read_imessages", "args": {{"contact": "", "limit": 1}}}}
 - "what was my most recently received text?" → {{"tool": "read_imessages", "args": {{"contact": "", "limit": 1, "received_only": true}}}}
 - "what did John say?" → {{"tool": "read_imessages", "args": {{"contact": "John"}}}}
