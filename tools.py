@@ -186,7 +186,8 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
                 JOIN chat_message_join cmj ON m.rowid = cmj.message_id
                 JOIN chat c ON cmj.chat_id = c.rowid
                 LEFT JOIN handle h ON m.handle_id = h.rowid
-                WHERE 1=1 {received_filter}
+                WHERE (m.associated_message_type = 0 OR m.associated_message_type IS NULL)
+                {received_filter}
                 ORDER BY m.date DESC LIMIT ?
             """, [limit])
             rows = cursor.fetchall()

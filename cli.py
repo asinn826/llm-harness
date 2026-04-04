@@ -6,7 +6,12 @@ interface without touching any core logic. The harness calls back into here via
 the confirm_fn parameter.
 """
 import atexit
+import os
 import readline
+import select
+import sys
+import termios
+import tty
 from pathlib import Path
 from typing import Optional
 from rich.console import Console
@@ -94,6 +99,39 @@ def expand_last_tool_result():
         console.print(f"[dim]  → {_last_tool_result}[/dim]")
     else:
         console.print("[dim]  (no tool result to expand)[/dim]")
+
+
+def check_for_expand_hotkey(timeout: float = 2.0):
+    """After printing a response, briefly poll stdin for Ctrl+O (0x0F).
+
+    Switches to raw mode for `timeout` seconds. If Ctrl+O is pressed, expands
+    the last tool result in place. Any other key is pushed back via the
+    readline pre-input buffer so it isn't lost.
+    """
+    if not sys.stdin.isatty():
+        return
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    try:
+        tty.setraw(fd)
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        if ready:
+            ch = os.read(fd, 1)
+            if ch == b'\x0f':  # Ctrl+O
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                expand_last_tool_result()
+                return
+            # Not Ctrl+O — restore and stuff the char back via readline
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            readline.stuff_char(ch[0])
+            return
+    except Exception:
+        pass
+    finally:
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        except Exception:
+            pass
 
 
 def confirm_tool(tool_name: str, args: dict) -> bool:
