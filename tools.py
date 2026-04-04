@@ -320,7 +320,11 @@ def send_imessage(contact: str, message: str = "", area_code: str = "", label: s
     set thePhone to value of item 1 of phones of thePerson'''
 
     # Step 1: resolve phone number from Contacts
+    # `launch` reconnects AppleScript to the running instance without bringing
+    # it to the foreground — prevents the -600 "Application isn't running" error
+    # that can occur even when Contacts.app is open.
     lookup_script = f'''
+tell application "Contacts" to launch
 tell application "Contacts"
     set matchingPeople to (every person whose name contains "{contact}")
     if (count of matchingPeople) is 0 then
