@@ -181,13 +181,12 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
             cursor.execute(f"""
                 SELECT DISTINCT m.text, m.attributedBody, m.is_from_me, m.date,
                        c.display_name, c.chat_identifier, h.id AS sender_handle,
-                       m.cache_has_attachments
+                       m.cache_has_attachments, m.associated_message_type
                 FROM message m
                 JOIN chat_message_join cmj ON m.rowid = cmj.message_id
                 JOIN chat c ON cmj.chat_id = c.rowid
                 LEFT JOIN handle h ON m.handle_id = h.rowid
-                WHERE (m.associated_message_type = 0 OR m.associated_message_type IS NULL)
-                {received_filter}
+                WHERE 1=1 {received_filter}
                 ORDER BY m.date DESC LIMIT ?
             """, [limit])
             rows = cursor.fetchall()
@@ -227,13 +226,23 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
             threads: dict[str, list[str]] = defaultdict(list)
             thread_order: list[str] = []  # preserves first-seen order
 
-            for text, attributed_body, is_from_me, date, display_name, chat_id, sender_handle, has_attachments in reversed(rows):
+            REACTION_LABELS = {
+                2000: "loved", 2001: "liked", 2002: "disliked",
+                2003: "laughed at", 2004: "emphasized", 2005: "questioned",
+            }
+
+            for text, attributed_body, is_from_me, date, display_name, chat_id, sender_handle, has_attachments, reaction_type in reversed(rows):
                 body = decode_message_text(text, attributed_body)
                 if not body:
                     if has_attachments:
                         body = "[image]"
                     else:
                         continue
+
+                # Tag tapback reactions so the model understands they're reactions,
+                # not standalone messages — but keep them so "who reacted?" works.
+                if reaction_type and reaction_type in REACTION_LABELS:
+                    body = f"[reacted: {REACTION_LABELS[reaction_type]}] {body}"
                 ts = (date / 1e9 if date > 1e12 else date) + APPLE_EPOCH
                 dt = datetime.fromtimestamp(ts).strftime("%b %d %H:%M")
                 if is_from_me:
@@ -272,7 +281,7 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
                 is_group = len(participants) > 1
                 digits = _last10(chat_id or "")
                 display_name = next(
-                    (dn for _, _, _, _, dn, cid, _, _ in rows if cid == chat_id and dn), None
+                    (dn for _, _, _, _, dn, cid, _, _, _ in rows if cid == chat_id and dn), None
                 )
                 label = name_map.get(digits) or display_name or ("Group Chat" if is_group else chat_id)
 
