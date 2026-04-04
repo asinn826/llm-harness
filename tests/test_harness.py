@@ -59,6 +59,49 @@ def test_parse_tool_call_returns_none_for_json_without_tool_key():
     assert result is None
 
 
+def test_read_only_tools_do_not_require_confirmation():
+    """READ_ONLY tools should run without calling confirm_fn."""
+    from tools import Permission
+    confirm_called = []
+    confirm_fn = lambda tool_name, args: confirm_called.append(tool_name) or True
+
+    conversation = []
+    responses = iter([
+        '{"tool": "calculator", "args": {"expression": "1+1"}}',
+        "The answer is 2.",
+    ])
+    model_fn = lambda conv: next(responses)
+    run_conversation_turn("What is 1+1?", conversation, model_fn, TOOLS, confirm_fn=confirm_fn)
+
+    assert confirm_called == [], "confirm_fn should not be called for READ_ONLY tools"
+    assert TOOLS["calculator"].permission == Permission.READ_ONLY
+
+
+def test_requires_confirmation_tools_call_confirm_fn():
+    """REQUIRES_CONFIRMATION tools must always call confirm_fn."""
+    from tools import Permission
+    confirm_called = []
+    confirm_fn = lambda tool_name, args: confirm_called.append(tool_name) or False
+
+    conversation = []
+    responses = iter([
+        '{"tool": "run_shell", "args": {"command": "echo hi"}}',
+        "Denied.",
+    ])
+    model_fn = lambda conv: next(responses)
+    run_conversation_turn("Run echo hi", conversation, model_fn, TOOLS, confirm_fn=confirm_fn)
+
+    assert "run_shell" in confirm_called
+    assert TOOLS["run_shell"].permission == Permission.REQUIRES_CONFIRMATION
+
+
+def test_all_tools_have_permission_annotation():
+    """Every tool in TOOLS must have a permission annotation — no unannotated tools."""
+    for name, fn in TOOLS.items():
+        assert hasattr(fn, "permission"), f"Tool '{name}' is missing a @permission annotation"
+        assert hasattr(fn, "needs_confirmation"), f"Tool '{name}' is missing needs_confirmation attribute"
+
+
 def test_parse_tool_call_handles_gemma_call_prefix():
     """Gemma 4 sometimes outputs `call:"tool", "args": {...}` instead of valid JSON."""
     response = 'call:"calculator", "args": {"expression": "2+2"}'
@@ -94,17 +137,19 @@ def test_run_conversation_turn_with_tool_call():
 
 
 def test_run_conversation_turn_denied_tool():
-    """User denies a tool call — harness injects denial and model continues."""
+    """User denies a tool call — harness injects denial and model continues.
+    Uses run_shell (REQUIRES_CONFIRMATION) so the confirm_fn is actually called.
+    """
     conversation = []
     responses = iter([
-        '{"tool": "calculator", "args": {"expression": "2+2"}}',
-        "I was unable to calculate that.",
+        '{"tool": "run_shell", "args": {"command": "echo hi"}}',
+        "I was unable to run that.",
     ])
     model_fn = lambda conv: next(responses)
     confirm_fn = lambda tool_name, args: False  # always deny
 
-    result = run_conversation_turn("What is 2+2?", conversation, model_fn, TOOLS, confirm_fn=confirm_fn)
-    assert result == "I was unable to calculate that."
+    result = run_conversation_turn("Run echo hi", conversation, model_fn, TOOLS, confirm_fn=confirm_fn)
+    assert result == "I was unable to run that."
     # tool result should contain denial message
     tool_result = next(m for m in conversation if m["role"] == "tool")
     assert "denied" in tool_result["content"].lower()

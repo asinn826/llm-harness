@@ -196,7 +196,14 @@ def confirm_and_run(tool_call: dict, tools: dict, confirm_fn=None, result_fn=Non
     # Drop null args so function defaults kick in rather than passing None
     args = {k: v for k, v in args.items() if v is not None}
 
-    if confirm_fn is None:
+    # Read-only tools run automatically — no confirmation needed.
+    # Tools without a permission annotation default to requiring confirmation
+    # (fail-safe: unknown tools are treated as potentially destructive).
+    needs_confirmation = getattr(tools[tool_name], "needs_confirmation", True)
+
+    if not needs_confirmation:
+        approved = True
+    elif confirm_fn is None:
         print(f"[Tool call] {tool_name}({args})")
         approved = input("Run this? [y/n]: ").strip().lower() == "y"
     else:

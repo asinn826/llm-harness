@@ -5,8 +5,16 @@ the system prompt — so docstrings are load-bearing. Keep them accurate.
 
 To add a new tool:
   1. Define a function with a clear docstring describing args and behavior
-  2. Add it to the TOOLS dict at the bottom of this file
-  That's it.
+  2. Annotate it with @permission(Permission.READ_ONLY) or
+     @permission(Permission.REQUIRES_CONFIRMATION)
+  3. Add it to the TOOLS dict at the bottom of this file
+
+Permission levels:
+  READ_ONLY             — no side effects; runs automatically without asking
+  REQUIRES_CONFIRMATION — has side effects (sends, writes, executes); asks first
+
+The harness checks `fn.needs_confirmation` (set by the decorator) so it stays
+decoupled from this enum — you can extend Permission without touching harness.py.
 """
 import ast
 import glob
@@ -14,10 +22,53 @@ import os
 import sqlite3
 import subprocess
 from datetime import datetime
+from enum import Enum
+from typing import Callable, TypeVar
 import html2text
 import requests
 
+F = TypeVar("F", bound=Callable)
 
+
+class Permission(Enum):
+    """Permission level for a tool.
+
+    Extend this enum to add new levels (e.g. DANGEROUS, NETWORK_ONLY) as the
+    permission model grows. The harness only checks `fn.needs_confirmation`, so
+    new levels slot in without any harness changes — just update the decorator
+    and any dispatch logic in main.py.
+    """
+    READ_ONLY = "read_only"
+    """No side effects. Runs automatically without user confirmation."""
+
+    REQUIRES_CONFIRMATION = "requires_confirmation"
+    """Has side effects (sends messages, writes files, executes commands).
+    The harness will prompt the user before running."""
+
+    @property
+    def needs_confirmation(self) -> bool:
+        return self != Permission.READ_ONLY
+
+
+def permission(level: Permission) -> Callable[[F], F]:
+    """Decorator that attaches a Permission level to a tool function.
+
+    Sets two attributes on the function:
+      fn.permission         — the full Permission enum value (for introspection)
+      fn.needs_confirmation — bool shortcut used by harness.py
+
+    Example:
+        @permission(Permission.READ_ONLY)
+        def my_tool(...): ...
+    """
+    def decorator(fn: F) -> F:
+        fn.permission = level
+        fn.needs_confirmation = level.needs_confirmation
+        return fn
+    return decorator
+
+
+@permission(Permission.REQUIRES_CONFIRMATION)
 def run_shell(command: str) -> str:
     """Run a shell command and return stdout+stderr. Args: command (str). Returns: stdout+stderr as a single string, or "(no output)" if empty."""
     # shell=True passes the command directly to the shell — intentional for flexibility,
@@ -27,6 +78,7 @@ def run_shell(command: str) -> str:
     return (result.stdout + result.stderr).strip() or "(no output)"
 
 
+@permission(Permission.READ_ONLY)
 def read_file(path: str) -> str:
     """Read a file and return its contents. Args: path (str). Returns: file contents as a string, or "Error: <message>" on failure."""
     try:
@@ -36,6 +88,7 @@ def read_file(path: str) -> str:
         return f"Error: {e}"
 
 
+@permission(Permission.REQUIRES_CONFIRMATION)
 def write_file(path: str, content: str) -> str:
     """Write content to a file. Args: path (str), content (str). Returns: "OK" on success, or "Error: <message>" on failure."""
     try:
@@ -46,6 +99,7 @@ def write_file(path: str, content: str) -> str:
         return f"Error: {e}"
 
 
+@permission(Permission.READ_ONLY)
 def calculator(expression: str) -> str:
     """Evaluate a math expression safely using AST validation. Args: expression (str). Returns: result as a string, or "Error: <message>" on failure."""
     # Validate the AST before eval — only allow number literals and basic operators.
@@ -70,6 +124,7 @@ def _last10(phone: str) -> str:
     return digits[-10:] if len(digits) >= 10 else digits
 
 
+@permission(Permission.READ_ONLY)
 def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -> str:
     """Read recent iMessages. Args: contact (str) - contact name as it appears in Contacts; pass empty string "" to get most recent messages across all conversations, limit (int, optional) - number of recent messages to return (default 10), received_only (bool, optional) - if true, only return messages received from others (not sent by you). Returns: formatted message history or an error with setup instructions."""
     APPLE_EPOCH = 978307200  # seconds between Unix epoch (1970) and Apple epoch (2001)
@@ -259,6 +314,7 @@ end tell
         conn.close()
 
 
+@permission(Permission.READ_ONLY)
 def find_gif(query: str) -> str:
     """Search Tenor for a GIF matching the query and return a URL. Args: query (str). Returns: a Tenor GIF URL that can be sent as a message (iMessage will auto-preview it), or "Error: <message>" on failure."""
     try:
@@ -275,6 +331,7 @@ def find_gif(query: str) -> str:
         return f"Error: {e}"
 
 
+@permission(Permission.REQUIRES_CONFIRMATION)
 def send_imessage(contact: str, message: str = "", area_code: str = "", label: str = "") -> str:
     """Send a text message to a contact by name using the macOS Messages app. To send a GIF, first call find_gif to get a URL, then pass it as the message — iMessage will auto-preview it. Args: contact (str) - full name as it appears in Contacts (e.g. "Millie Wu"), message (str) - the message text to send, area_code (str, optional) - filter to a phone number with this area code (e.g. "929"), label (str, optional) - filter by phone label such as "mobile", "home", "work", "iPhone" (case-insensitive). Returns: confirmation string or "Error: <message>" on failure."""
     # AppleScript doesn't support backslash escaping in strings, so we pass
@@ -398,6 +455,7 @@ end tell
     return f"Message sent to {contact} via {service_type}. Check Messages.app to confirm delivery."
 
 
+@permission(Permission.READ_ONLY)
 def fetch_url(url: str) -> str:
     """Fetch the content of a webpage and return it as plain text. Args: url (str). Returns: page content as plain text (truncated to 3000 chars), or "Error: <message>" on failure."""
     try:
@@ -411,6 +469,7 @@ def fetch_url(url: str) -> str:
         return f"Error: {e}"
 
 
+@permission(Permission.READ_ONLY)
 def web_search(query: str) -> str:
     """Search the web using Tavily and return results. Args: query (str). Returns: newline-joined results (title + content snippet per result), "No results found.", or "Error: <message>"."""
     api_key = os.environ.get("TAVILY_API_KEY")
