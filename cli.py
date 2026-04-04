@@ -351,8 +351,20 @@ def get_user_input() -> Optional[str]:
                     lines_below = total // cols if total > 0 else 0
                     if lines_below > 0:
                         sys.stdout.write(f'\033[{lines_below}A')
-                    # \033[48;5;236m = dark gray background
-                    sys.stdout.write(f'\r\033[J{_PROMPT_STR}\033[48;5;236m{text_str}\033[0m\n')
+                    # Dark gray background across the full line(s), including ❯.
+                    # Pad each row to full terminal width so background fills edge-to-edge.
+                    BG = '\033[48;5;236m'
+                    visible = f"❯ {text_str}"
+                    sys.stdout.write('\r\033[J')
+                    for i in range(0, len(visible), cols):
+                        chunk = visible[i:i + cols]
+                        pad = cols - len(chunk)
+                        if i == 0:
+                            # First row: orange ❯, white text
+                            sys.stdout.write(f"{BG}\033[1;38;5;214m❯\033[0m{BG}\033[37m {text_str[:cols - _PROMPT_COLS]}{' ' * pad}\033[0m\n")
+                        else:
+                            sys.stdout.write(f"{BG}\033[37m{chunk}{' ' * pad}\033[0m\n")
+
                 else:
                     sys.stdout.write('\r\n')
                 sys.stdout.flush()
