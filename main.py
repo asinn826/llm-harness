@@ -61,7 +61,7 @@ def make_model_fn_mlx(tokenizer, model, system_prompt: str):
             prompt = "\n".join(lines) + "\nASSISTANT:"
 
         response = thinking_spinner(
-            fn=lambda: generate(model, tokenizer, prompt=prompt, max_tokens=512, verbose=False,
+            fn=lambda: generate(model, tokenizer, prompt=prompt, max_tokens=2048, verbose=False,
                                 repetition_penalty=1.2, repetition_context_size=100),
         )
         return response.strip()
@@ -158,7 +158,7 @@ def make_model_fn_hf(processor, model, system_prompt: str):
 
         def _generate():
             with torch.no_grad():
-                return model.generate(**inputs, max_new_tokens=512, do_sample=False,
+                return model.generate(**inputs, max_new_tokens=2048, do_sample=False,
                                       repetition_penalty=1.2)
 
         output = thinking_spinner(fn=_generate)
