@@ -217,7 +217,13 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
                 except Exception:
                     pass
 
-            lines = []
+            # Group messages by chat_identifier so the model sees clear
+            # conversation boundaries rather than a flat chronological stream.
+            # This is critical for correct per-thread summarization.
+            from collections import defaultdict
+            threads: dict[str, list[str]] = defaultdict(list)
+            thread_order: list[str] = []  # preserves first-seen order
+
             for text, attributed_body, is_from_me, date, display_name, chat_id in reversed(rows):
                 body = decode_message_text(text, attributed_body)
                 if not body:
@@ -229,8 +235,36 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
                 else:
                     digits = _last10(chat_id or "")
                     sender = name_map.get(digits) or display_name or chat_id or "Unknown"
-                lines.append(f"[{dt}] {sender}: {body}")
-            return '\n'.join(lines) if lines else "No readable messages found."
+
+                # Derive a human-readable thread label:
+                # - Group chats: use display_name if set, else "Group Chat"
+                # - 1:1 chats: use the resolved contact name
+                is_group = chat_id and chat_id.startswith("chat;")
+                if is_group:
+                    thread_label = display_name or "Group Chat"
+                else:
+                    digits = _last10(chat_id or "")
+                    thread_label = name_map.get(digits) or display_name or chat_id or "Unknown"
+
+                if chat_id not in thread_order:
+                    thread_order.append(chat_id)
+                threads[chat_id].append(f"  [{dt}] {sender}: {body}")
+
+            if not threads:
+                return "No readable messages found."
+
+            sections = []
+            for chat_id in thread_order:
+                is_group = chat_id and chat_id.startswith("chat;")
+                digits = _last10(chat_id or "")
+                label = name_map.get(digits) or next(
+                    (display_name for text, ab, is_from_me, date, display_name, cid
+                     in rows if cid == chat_id), None
+                ) or ("Group Chat" if is_group else chat_id)
+                prefix = "Group: " if is_group else ""
+                sections.append(f"--- {prefix}{label} ---\n" + "\n".join(threads[chat_id]))
+
+            return "\n\n".join(sections)
 
         # Get contact's phone numbers AND emails via Contacts.app
         script = f'''
