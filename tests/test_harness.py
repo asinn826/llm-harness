@@ -237,6 +237,23 @@ def test_parse_tool_call_gemma_with_nested_args():
     assert result["args"]["command"] == "ls -la"
 
 
+def test_parse_tool_call_flat_call_without_args_wrapper():
+    """call:"tool", "key": "val"} — model omits the "args" wrapper."""
+    response = 'call:"read_imessages", "contact": "Tyler"}'
+    result = parse_tool_call(response)
+    assert result is not None
+    assert result["tool"] == "read_imessages"
+    assert result["args"] == {"contact": "Tyler"}
+
+
+def test_parse_tool_call_flat_call_multiple_args():
+    response = 'call:"read_imessages", "contact": "Tyler", "limit": 5}'
+    result = parse_tool_call(response)
+    assert result is not None
+    assert result["args"]["contact"] == "Tyler"
+    assert result["args"]["limit"] == 5
+
+
 # ── confirm_and_run edge cases ──────────────────────────────────────────────
 
 def test_confirm_and_run_unknown_tool():
