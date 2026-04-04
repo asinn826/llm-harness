@@ -237,7 +237,15 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
             # message don't hit the DB multiple times.
             _source_cache: dict = {}
 
-            def fetch_source_body(guid: str):
+            def fetch_source_body(raw_guid: str):
+                # associated_message_guid has format "p:N/<GUID>" or "bp:<GUID>"
+                # Strip the prefix to get the actual message GUID.
+                guid = raw_guid
+                if '/' in guid:
+                    guid = guid.split('/', 1)[1]
+                elif guid.startswith('bp:'):
+                    guid = guid[3:]
+
                 if guid in _source_cache:
                     return _source_cache[guid]
                 cursor.execute("""

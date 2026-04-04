@@ -6,8 +6,12 @@ interface without touching any core logic. The harness calls back into here via
 the confirm_fn parameter.
 """
 import atexit
+import os
 import readline
+import select
 import sys
+import termios
+import tty
 from pathlib import Path
 from typing import Optional
 from rich.console import Console
@@ -94,11 +98,83 @@ def print_tool_result(result: str):
 
 
 def expand_last_tool_result():
-    """Print the full last tool result (invoked by the Ctrl+O expand command)."""
-    if _last_tool_result:
-        console.print(f"[dim]  → {_last_tool_result}[/dim]")
-    else:
+    """Show the full last tool result in an alternate-screen overlay.
+
+    Opens a pager-like view: arrow keys / j/k / space to scroll,
+    Esc / Ctrl+O / q to dismiss. Uses the terminal's alternate screen
+    buffer so the main conversation is fully restored on exit.
+    """
+    if not _last_tool_result:
         console.print("[dim]  (no tool result to expand)[/dim]")
+        return
+
+    if not sys.stdin.isatty():
+        console.print(f"[dim]  → {_last_tool_result}[/dim]")
+        return
+
+    fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(fd)
+    lines = _last_tool_result.split('\n')
+    scroll = 0
+
+    try:
+        cols, rows = os.get_terminal_size()
+        visible = rows - 2  # header + footer
+        max_scroll = max(0, len(lines) - visible)
+
+        # Enter alternate screen, hide cursor
+        sys.stdout.write('\033[?1049h\033[?25l')
+        tty.setraw(fd)
+
+        while True:
+            # Draw frame
+            sys.stdout.write('\033[2J\033[H')
+            header = f" Tool Output ({len(lines)} lines) \u2014 Esc/Ctrl+O/q to close, \u2191\u2193/j/k to scroll "
+            sys.stdout.write(f'\033[7m{header[:cols]:<{cols}}\033[0m\r\n')
+
+            for i in range(scroll, min(scroll + visible, len(lines))):
+                sys.stdout.write(f'{lines[i][:cols]}\r\n')
+
+            # Footer at bottom
+            sys.stdout.write(f'\033[{rows};1H')
+            end = min(scroll + visible, len(lines))
+            pct = int(end / len(lines) * 100) if lines else 100
+            foot = f" {scroll + 1}-{end}/{len(lines)} ({min(pct, 100)}%) "
+            sys.stdout.write(f'\033[7m{foot[:cols]:<{cols}}\033[0m')
+            sys.stdout.flush()
+
+            ch = os.read(fd, 1)
+            if ch == b'\x1b':  # Escape or arrow sequence
+                r, _, _ = select.select([fd], [], [], 0.05)
+                if r:
+                    seq = os.read(fd, 2)
+                    if seq == b'[A':       # Up
+                        scroll = max(0, scroll - 1)
+                    elif seq == b'[B':     # Down
+                        scroll = min(max_scroll, scroll + 1)
+                    elif seq in (b'[5', b'[6'):  # Page Up / Page Down
+                        try:
+                            os.read(fd, 1)  # consume ~
+                        except Exception:
+                            pass
+                        if seq == b'[5':
+                            scroll = max(0, scroll - visible)
+                        else:
+                            scroll = min(max_scroll, scroll + visible)
+                    continue
+                break  # plain Esc
+            elif ch in (b'\x0f', b'q', b'Q'):  # Ctrl+O or q
+                break
+            elif ch == b'j':
+                scroll = min(max_scroll, scroll + 1)
+            elif ch == b'k':
+                scroll = max(0, scroll - 1)
+            elif ch == b' ':
+                scroll = min(max_scroll, scroll + visible)
+    finally:
+        termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+        sys.stdout.write('\033[?25h\033[?1049l')
+        sys.stdout.flush()
 
 
 def confirm_tool(tool_name: str, args: dict) -> bool:
