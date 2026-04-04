@@ -32,6 +32,20 @@ atexit.register(readline.write_history_file, _HISTORY_FILE)
 
 _last_tool_result: str = ""
 
+
+def _setcbreak(fd):
+    """Like tty.setcbreak but also clears IEXTEN.
+
+    macOS's terminal driver maps Ctrl+O to VDISCARD (output flush toggle).
+    VDISCARD is processed when IEXTEN is set — even in non-canonical mode —
+    which means the byte never reaches the application. Clearing IEXTEN
+    ensures Ctrl+O arrives as a normal 0x0F byte.
+    """
+    tty.setcbreak(fd)
+    mode = termios.tcgetattr(fd)
+    mode[3] &= ~termios.IEXTEN
+    termios.tcsetattr(fd, termios.TCSANOW, mode)
+
 BANNER = """[bold white]LLM Harness[/bold white] — a minimal agent loop
 
 [dim]How it works:[/dim]
@@ -106,6 +120,7 @@ def expand_last_tool_result():
         # Enter alternate screen, hide cursor
         sys.stdout.write('\033[?1049h\033[?25l')
         tty.setraw(fd)
+        termios.tcflush(fd, termios.TCIFLUSH)
 
         while True:
             # Draw frame
@@ -237,7 +252,7 @@ def get_user_input() -> Optional[str]:
     saved_line = ""
 
     try:
-        tty.setcbreak(fd)
+        _setcbreak(fd)
         while True:
             ch = _read_char(fd)
             if not ch:
@@ -253,7 +268,7 @@ def get_user_input() -> Optional[str]:
                 if pos < len(buf):
                     sys.stdout.write(f'\033[{len(buf) - pos}D')
                 sys.stdout.flush()
-                tty.setcbreak(fd)
+                _setcbreak(fd)
                 continue
 
             # ── Enter ────────────────────────────────────────────────────
@@ -590,7 +605,7 @@ def _run_with_spinner(fn, label: str):
     frame = 0
     try:
         if is_tty:
-            tty.setcbreak(fd)
+            _setcbreak(fd)
         while thread.is_alive():
             sys.stdout.write(f"\r\033[2m{_SPINNER_FRAMES[frame % len(_SPINNER_FRAMES)]} {label}\033[0m")
             sys.stdout.flush()
@@ -609,7 +624,7 @@ def _run_with_spinner(fn, label: str):
                         # os.read() can return a buffered byte and exit instantly.
                         termios.tcflush(fd, termios.TCIFLUSH)
                         expand_last_tool_result()
-                        tty.setcbreak(fd)
+                        _setcbreak(fd)
                     # Non-Ctrl+O keystrokes during thinking are silently discarded
             else:
                 thread.join(timeout=0.08)
