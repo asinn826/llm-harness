@@ -165,3 +165,157 @@ def test_run_conversation_turn_max_iterations():
     assert "maximum" in result.lower()
     # conversation should end with an assistant message, not a dangling tool result
     assert conversation[-1]["role"] == "assistant"
+
+
+# ── parse_tool_call edge cases ──────────────────────────────────────────────
+
+def test_parse_tool_call_trailing_comma():
+    """JSON with trailing comma before } — common model output error."""
+    response = '{"tool": "calculator", "args": {"expression": "2+2",}}'
+    result = parse_tool_call(response)
+    assert result is not None
+    assert result["tool"] == "calculator"
+
+
+def test_parse_tool_call_null_value():
+    """JSON with missing value like "limit": , — repaired to null."""
+    response = '{"tool": "read_imessages", "args": {"contact": "", "limit": , "received_only": true}}'
+    result = parse_tool_call(response)
+    assert result is not None
+    assert result["tool"] == "read_imessages"
+    assert result["args"]["limit"] is None
+
+
+def test_parse_tool_call_nested_args():
+    """Tool call with nested object in args."""
+    response = '{"tool": "run_shell", "args": {"command": "echo {\\"key\\": \\"val\\"}"}}'
+    result = parse_tool_call(response)
+    assert result is not None
+    assert result["tool"] == "run_shell"
+
+
+def test_parse_tool_call_preamble_text():
+    """Model adds text before the JSON tool call."""
+    response = 'I will use the calculator tool.\n{"tool": "calculator", "args": {"expression": "3*4"}}'
+    result = parse_tool_call(response)
+    assert result is not None
+    assert result["tool"] == "calculator"
+    assert result["args"]["expression"] == "3*4"
+
+
+def test_parse_tool_call_json_without_args():
+    """Tool call with missing args key — should still parse."""
+    response = '{"tool": "calculator"}'
+    result = parse_tool_call(response)
+    assert result is not None
+    assert result["tool"] == "calculator"
+
+
+def test_parse_tool_call_non_string_tool():
+    """JSON with non-string tool value — not a valid tool call."""
+    result = parse_tool_call('{"tool": 123, "args": {}}')
+    assert result is None
+
+
+def test_parse_tool_call_empty_string():
+    result = parse_tool_call("")
+    assert result is None
+
+
+def test_parse_tool_call_plain_json_object():
+    """A JSON object without 'tool' key is not a tool call."""
+    result = parse_tool_call('{"name": "calculator", "arguments": {"expression": "1+1"}}')
+    assert result is None
+
+
+def test_parse_tool_call_gemma_with_nested_args():
+    """Gemma call: format with nested args object."""
+    response = 'call:"run_shell", "args": {"command": "ls -la"}'
+    result = parse_tool_call(response)
+    assert result is not None
+    assert result["tool"] == "run_shell"
+    assert result["args"]["command"] == "ls -la"
+
+
+# ── confirm_and_run edge cases ──────────────────────────────────────────────
+
+def test_confirm_and_run_unknown_tool():
+    """Unknown tool name returns an error string."""
+    from harness import confirm_and_run
+    result = confirm_and_run({"tool": "nonexistent", "args": {}}, TOOLS)
+    assert "unknown tool" in result.lower()
+
+
+def test_confirm_and_run_strips_null_args():
+    """Null args are stripped so function defaults kick in."""
+    from harness import confirm_and_run
+    result = confirm_and_run(
+        {"tool": "calculator", "args": {"expression": "1+1", "unused": None}},
+        TOOLS,
+    )
+    # calculator only takes 'expression' — null 'unused' should be stripped
+    assert result == "2"
+
+
+def test_confirm_and_run_tool_exception():
+    """Tool that raises an exception returns error string."""
+    from harness import confirm_and_run
+    def bad_tool():
+        raise RuntimeError("tool broke")
+    bad_tool.needs_confirmation = False
+    tools = {"bad": bad_tool}
+    result = confirm_and_run({"tool": "bad", "args": {}}, tools)
+    assert "Error" in result
+
+
+def test_confirm_and_run_calls_result_fn():
+    """result_fn callback is called with the tool result."""
+    from harness import confirm_and_run
+    results = []
+    confirm_and_run(
+        {"tool": "calculator", "args": {"expression": "5+5"}},
+        TOOLS,
+        result_fn=lambda r: results.append(r),
+    )
+    assert results == ["10"]
+
+
+# ── run_conversation_turn edge cases ────────────────────────────────────────
+
+def test_run_conversation_turn_tool_then_tool_then_text():
+    """Model calls two tools in sequence, then responds."""
+    conversation = []
+    responses = iter([
+        '{"tool": "calculator", "args": {"expression": "2+2"}}',
+        '{"tool": "calculator", "args": {"expression": "4+4"}}',
+        "2+2 is 4 and 4+4 is 8.",
+    ])
+    model_fn = lambda conv: next(responses)
+    result = run_conversation_turn("math", conversation, model_fn, TOOLS)
+    assert result == "2+2 is 4 and 4+4 is 8."
+    # user + tool_call + tool_result + tool_call + tool_result + assistant = 6
+    assert len(conversation) == 6
+
+
+def test_run_conversation_turn_result_fn_called():
+    """result_fn is called for each tool result."""
+    results = []
+    conversation = []
+    responses = iter([
+        '{"tool": "calculator", "args": {"expression": "9*9"}}',
+        "81.",
+    ])
+    run_conversation_turn(
+        "9*9", conversation, lambda conv: next(responses), TOOLS,
+        result_fn=lambda r: results.append(r),
+    )
+    assert results == ["81"]
+
+
+def test_run_conversation_turn_mutates_conversation():
+    """The conversation list is mutated in place."""
+    conversation = []
+    model_fn = lambda conv: "Hello!"
+    run_conversation_turn("hi", conversation, model_fn, TOOLS)
+    assert conversation[0] == {"role": "user", "content": "hi"}
+    assert conversation[1] == {"role": "assistant", "content": "Hello!"}

@@ -262,11 +262,16 @@ def get_user_input() -> Optional[str]:
                 sys.stdout.flush()
                 break
 
-            # ── Ctrl+C ───────────────────────────────────────────────────
+            # ── Ctrl+C — cancel current text, re-prompt ────────────────
             if ch == b'\x03':
                 sys.stdout.write('^C\r\n')
+                sys.stdout.write("\033[1;38;5;214m❯\033[0m ")
                 sys.stdout.flush()
-                raise KeyboardInterrupt
+                buf.clear()
+                pos = 0
+                hist_idx = hist_total
+                saved_line = ""
+                continue
 
             # ── Ctrl+D ───────────────────────────────────────────────────
             if ch == b'\x04':
@@ -599,6 +604,10 @@ def _run_with_spinner(fn, label: str):
                         sys.stdout.write('\r\033[K')
                         sys.stdout.flush()
                         termios.tcsetattr(fd, termios.TCSADRAIN, old)
+                        # Flush any stale bytes that accumulated during mode
+                        # transitions — without this, the overlay's first
+                        # os.read() can return a buffered byte and exit instantly.
+                        termios.tcflush(fd, termios.TCIFLUSH)
                         expand_last_tool_result()
                         tty.setcbreak(fd)
                     # Non-Ctrl+O keystrokes during thinking are silently discarded
