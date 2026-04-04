@@ -606,6 +606,16 @@ def get_user_input() -> Optional[str]:
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
     text = ''.join(buf).strip()
+    if text:
+        # Redraw the prompt line with the user's text in bold white so it
+        # stands out against the dim assistant output above and below.
+        cols = os.get_terminal_size().columns
+        total_chars = _PROMPT_COLS + len(buf)
+        lines_used = total_chars // cols if total_chars > 0 else 0
+        if lines_used > 0:
+            sys.stdout.write(f'\033[{lines_used}A')
+        sys.stdout.write(f'\r\033[J{_PROMPT_STR}\033[1;37m{text}\033[0m\n')
+        sys.stdout.flush()
     if text and text.lower() != "quit":
         readline.add_history(text)
     return text
