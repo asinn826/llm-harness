@@ -180,10 +180,11 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
             received_filter = "AND m.is_from_me = 0" if received_only else ""
             cursor.execute(f"""
                 SELECT DISTINCT m.text, m.attributedBody, m.is_from_me, m.date,
-                       c.display_name, c.chat_identifier
+                       c.display_name, c.chat_identifier, h.id AS sender_handle
                 FROM message m
                 JOIN chat_message_join cmj ON m.rowid = cmj.message_id
                 JOIN chat c ON cmj.chat_id = c.rowid
+                LEFT JOIN handle h ON m.handle_id = h.rowid
                 WHERE 1=1 {received_filter}
                 ORDER BY m.date DESC LIMIT ?
             """, [limit])
@@ -224,7 +225,7 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
             threads: dict[str, list[str]] = defaultdict(list)
             thread_order: list[str] = []  # preserves first-seen order
 
-            for text, attributed_body, is_from_me, date, display_name, chat_id in reversed(rows):
+            for text, attributed_body, is_from_me, date, display_name, chat_id, sender_handle in reversed(rows):
                 body = decode_message_text(text, attributed_body)
                 if not body:
                     continue
@@ -233,8 +234,10 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
                 if is_from_me:
                     sender = "You"
                 else:
-                    digits = _last10(chat_id or "")
-                    sender = name_map.get(digits) or display_name or chat_id or "Unknown"
+                    # Use the per-message handle (correct for group chats where
+                    # multiple people send messages) rather than the chat identifier.
+                    handle_digits = _last10(sender_handle or "")
+                    sender = name_map.get(handle_digits) or sender_handle or display_name or "Unknown"
 
                 if chat_id not in thread_order:
                     thread_order.append(chat_id)
@@ -264,7 +267,7 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
                 is_group = len(participants) > 1
                 digits = _last10(chat_id or "")
                 display_name = next(
-                    (dn for _, _, _, _, dn, cid in rows if cid == chat_id and dn), None
+                    (dn for _, _, _, _, dn, cid, _ in rows if cid == chat_id and dn), None
                 )
                 label = name_map.get(digits) or display_name or ("Group Chat" if is_group else chat_id)
 
