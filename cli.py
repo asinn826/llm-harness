@@ -241,17 +241,59 @@ def _read_char(fd: int) -> bytes:
 
 
 _PROMPT_COLS = 2  # visible width of "❯ " (emoji + space)
+_PROMPT_STR = "\033[1;38;5;214m❯\033[0m "
 
 
 def _redraw_line(buf: list, pos: int, old_len: int):
-    """Clear the current line content and redraw buf, leaving cursor at pos."""
-    sys.stdout.write(f'\r\033[{_PROMPT_COLS}C')  # move past prompt
-    text = ''.join(buf)
-    padding = max(0, old_len - len(buf))
-    sys.stdout.write(text + ' ' * padding)
-    back = len(buf) + padding - pos
-    if back > 0:
-        sys.stdout.write(f'\033[{back}D')
+    """Erase the entire input area and redraw buf, leaving cursor at pos.
+
+    Handles wrapped lines correctly by moving up to the prompt row before
+    clearing. Uses absolute cursor positioning (up/right) rather than
+    cursor-left, which doesn't cross line-wrap boundaries.
+    """
+    cols = os.get_terminal_size().columns
+
+    # Move cursor up to the prompt row. The old content may have wrapped
+    # across multiple terminal lines — we need to get back to the first one.
+    old_total = _PROMPT_COLS + old_len
+    lines_below = old_total // cols if old_total > 0 else 0
+    if lines_below > 0:
+        sys.stdout.write(f'\033[{lines_below}A')
+
+    # Clear from prompt start to end of screen, then redraw
+    sys.stdout.write(f'\r\033[J{_PROMPT_STR}')
+    sys.stdout.write(''.join(buf))
+
+    # Position cursor at pos (may be on an earlier wrapped line)
+    if pos < len(buf):
+        _move_cursor(len(buf), pos)
+
+    sys.stdout.flush()
+
+
+def _move_cursor(old_pos: int, new_pos: int):
+    """Move the terminal cursor from old_pos to new_pos within the input buffer.
+
+    Accounts for line wrapping — uses up/down + absolute column positioning
+    rather than cursor-left/right which don't cross line boundaries.
+    """
+    if old_pos == new_pos:
+        return
+    cols = os.get_terminal_size().columns
+    old_total = _PROMPT_COLS + old_pos
+    new_total = _PROMPT_COLS + new_pos
+    old_row = old_total // cols
+    new_row = new_total // cols
+    new_col = new_total % cols
+
+    if new_row < old_row:
+        sys.stdout.write(f'\033[{old_row - new_row}A')
+    elif new_row > old_row:
+        sys.stdout.write(f'\033[{new_row - old_row}B')
+
+    sys.stdout.write('\r')
+    if new_col > 0:
+        sys.stdout.write(f'\033[{new_col}C')
     sys.stdout.flush()
 
 
@@ -333,26 +375,23 @@ def get_user_input() -> Optional[str]:
             # ── Ctrl+A (home) ────────────────────────────────────────────
             if ch == b'\x01':
                 if pos > 0:
-                    sys.stdout.write(f'\033[{pos}D')
-                    sys.stdout.flush()
+                    _move_cursor(pos, 0)
                     pos = 0
                 continue
 
             # ── Ctrl+E (end) ─────────────────────────────────────────────
             if ch == b'\x05':
                 if pos < len(buf):
-                    sys.stdout.write(f'\033[{len(buf) - pos}C')
-                    sys.stdout.flush()
+                    _move_cursor(pos, len(buf))
                     pos = len(buf)
                 continue
 
             # ── Ctrl+K (kill to end of line) ─────────────────────────────
             if ch == b'\x0b':
                 if pos < len(buf):
-                    n = len(buf) - pos
+                    old_len = len(buf)
                     buf[pos:] = []
-                    sys.stdout.write(' ' * n + f'\033[{n}D')
-                    sys.stdout.flush()
+                    _redraw_line(buf, pos, old_len)
                 continue
 
             # ── Ctrl+U (kill entire line) ────────────────────────────────
@@ -380,11 +419,10 @@ def get_user_input() -> Optional[str]:
 
             # ── Ctrl+L (clear screen) ────────────────────────────────────
             if ch == b'\x0c':
-                sys.stdout.write('\033[2J\033[H')
-                sys.stdout.write("\033[1;38;5;214m❯\033[0m ")
+                sys.stdout.write(f'\033[2J\033[H{_PROMPT_STR}')
                 sys.stdout.write(''.join(buf))
                 if pos < len(buf):
-                    sys.stdout.write(f'\033[{len(buf) - pos}D')
+                    _move_cursor(len(buf), pos)
                 sys.stdout.flush()
                 continue
 
@@ -424,32 +462,28 @@ def get_user_input() -> Optional[str]:
                     # Right arrow
                     if code == b'C':
                         if pos < len(buf):
-                            sys.stdout.write('\033[C')
-                            sys.stdout.flush()
+                            _move_cursor(pos, pos + 1)
                             pos += 1
                         continue
 
                     # Left arrow
                     if code == b'D':
                         if pos > 0:
-                            sys.stdout.write('\033[D')
-                            sys.stdout.flush()
+                            _move_cursor(pos, pos - 1)
                             pos -= 1
                         continue
 
                     # Home (\033[H)
                     if code == b'H':
                         if pos > 0:
-                            sys.stdout.write(f'\033[{pos}D')
-                            sys.stdout.flush()
+                            _move_cursor(pos, 0)
                             pos = 0
                         continue
 
                     # End (\033[F)
                     if code == b'F':
                         if pos < len(buf):
-                            sys.stdout.write(f'\033[{len(buf) - pos}C')
-                            sys.stdout.flush()
+                            _move_cursor(pos, len(buf))
                             pos = len(buf)
                         continue
 
@@ -482,8 +516,7 @@ def get_user_input() -> Optional[str]:
                             while new_pos > 0 and buf[new_pos - 1] != ' ':
                                 new_pos -= 1
                             if new_pos < pos:
-                                sys.stdout.write(f'\033[{pos - new_pos}D')
-                                sys.stdout.flush()
+                                _move_cursor(pos, new_pos)
                                 pos = new_pos
                         elif rest == b';3C':  # Option+Right (word forward)
                             new_pos = pos
@@ -492,8 +525,7 @@ def get_user_input() -> Optional[str]:
                             while new_pos < len(buf) and buf[new_pos] == ' ':
                                 new_pos += 1
                             if new_pos > pos:
-                                sys.stdout.write(f'\033[{new_pos - pos}C')
-                                sys.stdout.flush()
+                                _move_cursor(pos, new_pos)
                                 pos = new_pos
                         continue
 
@@ -520,8 +552,7 @@ def get_user_input() -> Optional[str]:
                     while new_pos > 0 and buf[new_pos - 1] != ' ':
                         new_pos -= 1
                     if new_pos < pos:
-                        sys.stdout.write(f'\033[{pos - new_pos}D')
-                        sys.stdout.flush()
+                        _move_cursor(pos, new_pos)
                         pos = new_pos
                     continue
 
@@ -532,8 +563,7 @@ def get_user_input() -> Optional[str]:
                     while new_pos < len(buf) and buf[new_pos] == ' ':
                         new_pos += 1
                     if new_pos > pos:
-                        sys.stdout.write(f'\033[{new_pos - pos}C')
-                        sys.stdout.flush()
+                        _move_cursor(pos, new_pos)
                         pos = new_pos
                     continue
 
@@ -560,14 +590,14 @@ def get_user_input() -> Optional[str]:
             if not char.isprintable():
                 continue
 
+            old_len = len(buf)
             buf.insert(pos, char)
             pos += 1
             if pos == len(buf):
                 sys.stdout.write(char)
+                sys.stdout.flush()
             else:
-                sys.stdout.write(''.join(buf[pos - 1:]))
-                sys.stdout.write(f'\033[{len(buf) - pos}D')
-            sys.stdout.flush()
+                _redraw_line(buf, pos, old_len)
 
     except (EOFError, KeyboardInterrupt):
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
