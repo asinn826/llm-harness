@@ -86,6 +86,9 @@ Examples of when to use a tool:
 - "summarize recent messages from Michael Xia" → {{"tool": "read_imessages", "args": {{"contact": "Michael Xia"}}}}
 - "summarize my conversation with Sarah" → {{"tool": "read_imessages", "args": {{"contact": "Sarah"}}}}
 - "what has John been saying lately?" → {{"tool": "read_imessages", "args": {{"contact": "John"}}}}
+- "read my messages with Sarah from the last week" → {{"tool": "read_imessages", "args": {{"contact": "Sarah", "days_back": 7}}}}
+- "what have John and I talked about this month?" → {{"tool": "read_imessages", "args": {{"contact": "John", "days_back": 30}}}}
+- "show me messages from the past couple weeks" → {{"tool": "read_imessages", "args": {{"contact": "", "days_back": 14}}}}
 - "send a message to Michael Xia on his 929 number saying hello" → {{"tool": "send_imessage", "args": {{"contact": "Michael Xia", "message": "hello", "area_code": "929"}}}}
 - "send a message to Michael Xia on his 604 mobile number saying hello" → {{"tool": "send_imessage", "args": {{"contact": "Michael Xia", "message": "hello", "area_code": "604", "label": "mobile"}}}}
 - "send a gif of a dumpster fire to Michael Xia" → first {{"tool": "find_gif", "args": {{"query": "dumpster fire"}}}}, then {{"tool": "send_imessage", "args": {{"contact": "Michael Xia", "message": "<url from find_gif>"}}}}

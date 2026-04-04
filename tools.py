@@ -336,9 +336,24 @@ def _resolve_sender(is_from_me, sender_handle, name_map, display_name=None) -> s
 
 # ── iMessage read: all conversations ────────────────────────────────────────
 
-def _read_all_conversations(cursor, limit: int, received_only: bool) -> str:
+def _date_filter_sql(days_back: int) -> tuple[str, list]:
+    """Build a SQL WHERE clause fragment for time-based filtering.
+
+    Returns (sql_fragment, params). iMessage dates are nanoseconds since
+    the Apple epoch (2001-01-01), so we convert the cutoff accordingly.
+    """
+    if days_back <= 0:
+        return "", []
+    import time
+    cutoff_unix = time.time() - (days_back * 86400)
+    cutoff_apple_ns = int((cutoff_unix - APPLE_EPOCH) * 1e9)
+    return "AND m.date > ?", [cutoff_apple_ns]
+
+
+def _read_all_conversations(cursor, limit: int, received_only: bool, days_back: int = 0) -> str:
     """Read recent messages across all conversations, grouped by thread."""
     received_filter = "AND m.is_from_me = 0" if received_only else ""
+    date_sql, date_params = _date_filter_sql(days_back)
     cursor.execute(f"""
         SELECT m.text, m.attributedBody, m.is_from_me, m.date,
                c.display_name, c.chat_identifier, h.id AS sender_handle,
@@ -348,10 +363,10 @@ def _read_all_conversations(cursor, limit: int, received_only: bool) -> str:
         JOIN chat_message_join cmj ON m.rowid = cmj.message_id
         JOIN chat c ON cmj.chat_id = c.rowid
         LEFT JOIN handle h ON m.handle_id = h.rowid
-        WHERE 1=1 {received_filter}
+        WHERE 1=1 {received_filter} {date_sql}
         GROUP BY m.rowid
         ORDER BY m.date DESC LIMIT ?
-    """, [limit])
+    """, date_params + [limit])
     rows = cursor.fetchall()
     if not rows:
         return "No messages found."
@@ -417,7 +432,7 @@ def _read_all_conversations(cursor, limit: int, received_only: bool) -> str:
 
 # ── iMessage read: specific contact ─────────────────────────────────────────
 
-def _read_contact_messages(cursor, contact: str, limit: int, received_only: bool) -> str:
+def _read_contact_messages(cursor, contact: str, limit: int, received_only: bool, days_back: int = 0) -> str:
     """Read recent messages from a specific contact."""
     # Resolve contact's phone numbers and emails via Contacts.app
     script = f'''
@@ -467,6 +482,7 @@ end tell
 
     # Fetch messages with reaction and attachment metadata
     received_filter = "AND m.is_from_me = 0" if received_only else ""
+    date_sql, date_params = _date_filter_sql(days_back)
     placeholders = ','.join('?' * len(matching_chat_ids))
     cursor.execute(f"""
         SELECT m.text, m.attributedBody, m.is_from_me, m.date,
@@ -474,10 +490,10 @@ end tell
                m.associated_message_guid
         FROM message m
         JOIN chat_message_join cmj ON m.rowid = cmj.message_id
-        WHERE cmj.chat_id IN ({placeholders}) {received_filter}
+        WHERE cmj.chat_id IN ({placeholders}) {received_filter} {date_sql}
         GROUP BY m.rowid
         ORDER BY m.date DESC LIMIT ?
-    """, matching_chat_ids + [limit])
+    """, matching_chat_ids + date_params + [limit])
 
     rows = cursor.fetchall()
     if not rows:
@@ -507,16 +523,18 @@ end tell
 # ── iMessage read: entry point ──────────────────────────────────────────────
 
 @permission(Permission.READ_ONLY)
-def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -> str:
-    """Read recent iMessages. Args: contact (str) - contact name as it appears in Contacts; pass empty string "" to get most recent messages across all conversations, limit (int, optional) - number of recent messages to return (default 10), received_only (bool, optional) - if true, only return messages received from others (not sent by you). Returns: formatted message history or an error with setup instructions."""
+def read_imessages(contact: str, limit: int = 10, received_only: bool = False, days_back: int = 0) -> str:
+    """Read recent iMessages. Args: contact (str) - contact name as it appears in Contacts; pass empty string "" to get most recent messages across all conversations, limit (int, optional) - number of recent messages to return (default 10), received_only (bool, optional) - if true, only return messages received from others (not sent by you), days_back (int, optional) - only return messages from the last N days (default 0 means no time filter, just use limit). When days_back is set, limit is raised to 500 to avoid cutting off the time window. Returns: formatted message history or an error with setup instructions."""
     conn, error = _open_messages_db()
     if error:
         return error
+    if days_back > 0:
+        limit = max(limit, 500)
     try:
         cursor = conn.cursor()
         if not contact:
-            return _read_all_conversations(cursor, limit, received_only)
-        return _read_contact_messages(cursor, contact, limit, received_only)
+            return _read_all_conversations(cursor, limit, received_only, days_back)
+        return _read_contact_messages(cursor, contact, limit, received_only, days_back)
     finally:
         conn.close()
 
