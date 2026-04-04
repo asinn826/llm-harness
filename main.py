@@ -17,12 +17,63 @@ import torch
 
 from harness import build_system_prompt, run_conversation_turn
 from tools import TOOLS
+import sys
+
 from cli import (
     console, print_banner, print_assistant, print_tool_result,
     confirm_tool, get_user_input, thinking_spinner, expand_last_tool_result,
+    start_stream, stream_token, end_stream,
 )
 
 _USE_MLX = torch.backends.mps.is_available()
+
+_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+def _stream_response(token_iter) -> str:
+    """Consume a token iterator, streaming plain text to stdout.
+
+    Shows a spinner initially. Once we see enough tokens to determine the
+    response is plain text (not a tool call), switches to streaming mode.
+    Tool calls (starting with {, ```, or call:) stay behind the spinner.
+    Returns the full response string.
+    """
+    chunks = []
+    streaming = False
+    frame = 0
+
+    for response in token_iter:
+        # mlx-lm yields GenerationResponse objects; HF TextIteratorStreamer yields strings
+        token = response.text if hasattr(response, 'text') else response
+        chunks.append(token)
+
+        if not streaming:
+            text_so_far = ''.join(chunks).lstrip()
+            # Show spinner while waiting to decide
+            sys.stdout.write(f"\r\033[2m{_SPINNER_FRAMES[frame % len(_SPINNER_FRAMES)]} Thinking...\033[0m")
+            sys.stdout.flush()
+            frame += 1
+
+            if len(text_so_far) < 3:
+                continue
+            # Heuristic: tool calls start with { or ``` or call:
+            if text_so_far[0] in ('{', '`') or text_so_far.startswith('call:'):
+                continue  # likely a tool call — collect silently
+            # Plain text — clear spinner and start streaming
+            sys.stdout.write('\r\033[K')
+            start_stream()
+            stream_token(text_so_far)
+            streaming = True
+        else:
+            stream_token(token)
+
+    # Clean up
+    if not streaming:
+        sys.stdout.write('\r\033[K')  # clear spinner
+    else:
+        end_stream()
+
+    return ''.join(chunks).strip()
 
 
 def load_model_mlx(model_id: str):
@@ -39,8 +90,8 @@ def load_model_mlx(model_id: str):
 
 
 def make_model_fn_mlx(tokenizer, model, system_prompt: str):
-    """Return a model_fn backed by mlx-lm generate."""
-    from mlx_lm import generate
+    """Return a model_fn backed by mlx-lm streaming generate."""
+    from mlx_lm import stream_generate
 
     def model_fn(conversation: list) -> str:
         messages = [{"role": "system", "content": system_prompt}] + conversation
@@ -60,11 +111,10 @@ def make_model_fn_mlx(tokenizer, model, system_prompt: str):
                     lines.append(f"{m['role'].upper()}: {m['content']}")
             prompt = "\n".join(lines) + "\nASSISTANT:"
 
-        response = thinking_spinner(
-            fn=lambda: generate(model, tokenizer, prompt=prompt, max_tokens=2048, verbose=False,
-                                repetition_penalty=1.2, repetition_context_size=100),
+        return _stream_response(
+            stream_generate(model, tokenizer, prompt=prompt, max_tokens=2048,
+                            repetition_penalty=1.2, repetition_context_size=100),
         )
-        return response.strip()
 
     return model_fn
 
@@ -121,6 +171,9 @@ def load_model_hf(model_id: str):
 
 def make_model_fn_hf(processor, model, system_prompt: str):
     """Return a callable(conversation) -> str that runs one generation step."""
+    from transformers import TextIteratorStreamer
+    import threading
+
     def model_fn(conversation: list) -> str:
         messages = [{"role": "system", "content": system_prompt}] + conversation
 
@@ -154,15 +207,18 @@ def make_model_fn_hf(processor, model, system_prompt: str):
             text = "\n".join(lines) + "\nASSISTANT:"
             inputs = processor(text=text, return_tensors="pt").to(model.device)
 
-        input_len = inputs["input_ids"].shape[-1]
+        streamer = TextIteratorStreamer(processor, skip_prompt=True, skip_special_tokens=True)
 
         def _generate():
             with torch.no_grad():
-                return model.generate(**inputs, max_new_tokens=2048, do_sample=False,
-                                      repetition_penalty=1.2)
+                model.generate(**inputs, max_new_tokens=2048, do_sample=False,
+                               repetition_penalty=1.2, streamer=streamer)
 
-        output = thinking_spinner(fn=_generate)
-        return processor.decode(output[0][input_len:], skip_special_tokens=True).strip()
+        thread = threading.Thread(target=_generate)
+        thread.start()
+        response = _stream_response(streamer)
+        thread.join()
+        return response
 
     return model_fn
 

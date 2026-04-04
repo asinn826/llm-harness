@@ -64,9 +64,40 @@ def print_banner():
     console.print(Panel(BANNER, border_style="dim"))
 
 
+_last_was_streamed = False
+
+
 def print_assistant(message: str):
-    """Display the assistant's final plain-text response."""
+    """Display the assistant's final plain-text response.
+
+    Skips printing if the response was already streamed token-by-token
+    (model_fn sets _last_was_streamed when it streams).
+    """
+    global _last_was_streamed
+    if _last_was_streamed:
+        _last_was_streamed = False
+        return
     console.print(f"\n[dim]→[/dim] {message}\n")
+
+
+def start_stream():
+    """Print the stream prefix (→) and mark that streaming is active."""
+    global _last_was_streamed
+    _last_was_streamed = True
+    sys.stdout.write(f"\n\033[2m→\033[0m ")
+    sys.stdout.flush()
+
+
+def stream_token(token: str):
+    """Print a single token during streaming."""
+    sys.stdout.write(token)
+    sys.stdout.flush()
+
+
+def end_stream():
+    """Finish streaming output with a trailing newline."""
+    sys.stdout.write('\n')
+    sys.stdout.flush()
 
 
 def print_tool_call(tool_name: str, args: dict):
