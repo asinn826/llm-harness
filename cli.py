@@ -262,12 +262,8 @@ def get_user_input() -> Optional[str]:
             if ch == b'\x0f':
                 termios.tcsetattr(fd, termios.TCSADRAIN, old)
                 expand_last_tool_result()
-                # Redraw prompt + buffer after overlay closes
-                sys.stdout.write("\033[1;38;5;214m❯\033[0m ")
-                sys.stdout.write(''.join(buf))
-                if pos < len(buf):
-                    sys.stdout.write(f'\033[{len(buf) - pos}D')
-                sys.stdout.flush()
+                # Alt screen restore (\033[?1049l) puts the original screen
+                # and cursor position back — no need to redraw the prompt.
                 _setcbreak(fd)
                 continue
 
