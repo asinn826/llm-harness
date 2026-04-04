@@ -67,7 +67,12 @@ def print_tool_call(tool_name: str, args: dict):
 
 def print_tool_result(result: str):
     """Display the result returned by a tool (truncated if long)."""
-    display = result if len(result) < 500 else result[:500] + "\n[dim]... (truncated)[/dim]"
+    if len(result) < 500:
+        display = result
+    else:
+        truncated_chars = len(result) - 500
+        truncated_lines = result[500:].count('\n')
+        display = result[:500] + f"\n[dim]... (truncated — {truncated_lines} more lines, {truncated_chars} chars)[/dim]"
     console.print(f"[dim]  → {display}[/dim]")
 
 

@@ -236,16 +236,6 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
                     digits = _last10(chat_id or "")
                     sender = name_map.get(digits) or display_name or chat_id or "Unknown"
 
-                # Derive a human-readable thread label:
-                # - Group chats: use display_name if set, else "Group Chat"
-                # - 1:1 chats: use the resolved contact name
-                is_group = chat_id and chat_id.startswith("chat;")
-                if is_group:
-                    thread_label = display_name or "Group Chat"
-                else:
-                    digits = _last10(chat_id or "")
-                    thread_label = name_map.get(digits) or display_name or chat_id or "Unknown"
-
                 if chat_id not in thread_order:
                     thread_order.append(chat_id)
                 threads[chat_id].append(f"  [{dt}] {sender}: {body}")
@@ -254,6 +244,8 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
                 return "No readable messages found."
 
             # Resolve participant names for each chat via chat_handle_join.
+            # A chat with >1 participant handle is a group chat — more reliable
+            # than checking the chat_identifier prefix, which varies by service.
             cursor.execute("""
                 SELECT c.chat_identifier, h.id
                 FROM chat c
@@ -268,7 +260,8 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
 
             sections = []
             for chat_id in thread_order:
-                is_group = chat_id and chat_id.startswith("chat;")
+                participants = chat_participants.get(chat_id, [])
+                is_group = len(participants) > 1
                 digits = _last10(chat_id or "")
                 display_name = next(
                     (dn for _, _, _, _, dn, cid in rows if cid == chat_id and dn), None
