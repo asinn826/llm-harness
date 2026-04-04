@@ -22,7 +22,6 @@ import sys
 from cli import (
     console, print_banner, print_assistant, print_tool_result,
     confirm_tool, get_user_input, thinking_spinner, expand_last_tool_result,
-    start_stream, stream_token, end_stream,
 )
 
 _USE_MLX = torch.backends.mps.is_available()
@@ -31,49 +30,80 @@ _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 
 def _stream_response(token_iter) -> str:
-    """Consume a token iterator, streaming plain text to stdout.
+    """Consume a token iterator, showing a spinner with paragraph-level progress.
 
-    Shows a spinner initially. Once we see enough tokens to determine the
-    response is plain text (not a tool call), switches to streaming mode.
-    Tool calls (starting with {, ```, or call:) stay behind the spinner.
+    The spinner runs the entire time. As complete paragraphs (delimited by
+    blank lines) accumulate, they're flushed above the spinner so the user
+    sees meaningful progress without the jitter of token-by-token streaming.
+    Tool calls (starting with {, ```, or call:) stay entirely behind the spinner.
     Returns the full response string.
     """
-    chunks = []
-    streaming = False
+    import cli
+
+    chunks: list[str] = []
+    displayed_up_to = 0     # char index into full text already shown
+    is_tool_call = None      # None = undecided, True/False once decided
     frame = 0
 
+    def _spin():
+        nonlocal frame
+        sys.stdout.write(f"\r\033[2m{_SPINNER_FRAMES[frame % len(_SPINNER_FRAMES)]} Thinking...\033[0m\033[K")
+        sys.stdout.flush()
+        frame += 1
+
     for response in token_iter:
-        # mlx-lm yields GenerationResponse objects; HF TextIteratorStreamer yields strings
         token = response.text if hasattr(response, 'text') else response
         chunks.append(token)
+        _spin()
 
-        if not streaming:
-            text_so_far = ''.join(chunks).lstrip()
-            # Show spinner while waiting to decide
-            sys.stdout.write(f"\r\033[2m{_SPINNER_FRAMES[frame % len(_SPINNER_FRAMES)]} Thinking...\033[0m")
-            sys.stdout.flush()
-            frame += 1
+        full = ''.join(chunks)
 
-            if len(text_so_far) < 3:
+        # Decide tool-call vs. plain text once we have enough chars
+        if is_tool_call is None:
+            stripped = full.lstrip()
+            if len(stripped) < 3:
                 continue
-            # Heuristic: tool calls start with { or ``` or call:
-            if text_so_far[0] in ('{', '`') or text_so_far.startswith('call:'):
-                continue  # likely a tool call — collect silently
-            # Plain text — clear spinner and start streaming
-            sys.stdout.write('\r\033[K')
-            start_stream()
-            stream_token(text_so_far)
-            streaming = True
-        else:
-            stream_token(token)
+            is_tool_call = stripped[0] in ('{', '`') or stripped.startswith('call:')
 
-    # Clean up
-    if not streaming:
-        sys.stdout.write('\r\033[K')  # clear spinner
+        if is_tool_call:
+            continue
+
+        # Check for paragraph breaks (\n\n) in the un-displayed portion.
+        # When found, flush everything up to the last break above the spinner.
+        undisplayed = full[displayed_up_to:]
+        last_break = undisplayed.rfind('\n\n')
+        if last_break > 0:
+            to_show = undisplayed[:last_break].rstrip()
+            if to_show:
+                sys.stdout.write('\r\033[K')  # clear spinner line
+                if displayed_up_to == 0:
+                    sys.stdout.write(f"\n\033[2m→\033[0m ")
+                sys.stdout.write(to_show + '\n\n')
+                sys.stdout.flush()
+            displayed_up_to += last_break + 2
+
+    # Generation complete — clear spinner
+    sys.stdout.write('\r\033[K')
+    sys.stdout.flush()
+
+    full = ''.join(chunks).strip()
+
+    if is_tool_call or is_tool_call is None:
+        return full
+
+    # Flush any remaining text after the last paragraph break
+    remaining = full[displayed_up_to:].strip()
+    if displayed_up_to == 0:
+        # Short response with no paragraph breaks — let print_assistant handle it
+        return full
+
+    if remaining:
+        sys.stdout.write(remaining + '\n\n')
     else:
-        end_stream()
-
-    return ''.join(chunks).strip()
+        sys.stdout.write('\n')
+    sys.stdout.flush()
+    cli._last_was_streamed = True
+    return full
 
 
 def load_model_mlx(model_id: str):
