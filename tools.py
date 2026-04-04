@@ -253,16 +253,34 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False) -
             if not threads:
                 return "No readable messages found."
 
+            # Resolve participant names for each chat via chat_handle_join.
+            cursor.execute("""
+                SELECT c.chat_identifier, h.id
+                FROM chat c
+                JOIN chat_handle_join chj ON c.rowid = chj.chat_id
+                JOIN handle h ON chj.handle_id = h.rowid
+            """)
+            chat_participants: dict[str, list[str]] = defaultdict(list)
+            for cid, handle_id in cursor.fetchall():
+                digits = _last10(handle_id)
+                name = name_map.get(digits) or handle_id
+                chat_participants[cid].append(name)
+
             sections = []
             for chat_id in thread_order:
                 is_group = chat_id and chat_id.startswith("chat;")
                 digits = _last10(chat_id or "")
-                label = name_map.get(digits) or next(
-                    (display_name for text, ab, is_from_me, date, display_name, cid
-                     in rows if cid == chat_id), None
-                ) or ("Group Chat" if is_group else chat_id)
-                prefix = "Group: " if is_group else ""
-                sections.append(f"--- {prefix}{label} ---\n" + "\n".join(threads[chat_id]))
+                display_name = next(
+                    (dn for _, _, _, _, dn, cid in rows if cid == chat_id and dn), None
+                )
+                label = name_map.get(digits) or display_name or ("Group Chat" if is_group else chat_id)
+
+                header = f"--- {'Group: ' if is_group else ''}{label} ---"
+                if is_group and chat_id in chat_participants:
+                    participants = ", ".join(sorted(set(chat_participants[chat_id])))
+                    header += f"\nParticipants: {participants}"
+
+                sections.append(header + "\n" + "\n".join(threads[chat_id]))
 
             return "\n\n".join(sections)
 
