@@ -11,3 +11,4 @@ build/
 *.safetensors
 ~/.cache/huggingface/
 .venv/
+.worktrees/
