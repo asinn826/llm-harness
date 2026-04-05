@@ -268,7 +268,8 @@ def main():
 
     use_mlx = _USE_MLX and not args.no_mlx
 
-    print_banner()
+    backend = "MLX" if use_mlx else "HF"
+    print_banner(args.model, backend)
 
     if use_mlx:
         tokenizer, model = load_model_mlx(args.model)

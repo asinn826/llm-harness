@@ -46,22 +46,30 @@ def _setcbreak(fd):
     mode[3] &= ~termios.IEXTEN
     termios.tcsetattr(fd, termios.TCSANOW, mode)
 
-BANNER = """[bold white]LLM Harness[/bold white] — a minimal agent loop
-
-[dim]How it works:[/dim]
-  [dim]1.[/dim] Your message is added to a conversation list
-  [dim]2.[/dim] The model generates a response (just tokens — no magic)
-  [dim]3.[/dim] If the response is a JSON tool call, the harness runs it and feeds the result back
-  [dim]4.[/dim] This repeats until the model responds in plain text
-  [dim]5.[/dim] That's it — this is what Claude Code does too, just with more tools
-
-Type [bold]quit[/bold] to exit.
-"""
+HINTS = [
+    "what's on my calendar today?",
+    "send a gif to someone who deserves it",
+    "read my latest texts",
+    "summarize this file: README.md",
+    "search the web for ...",
+]
 
 
-def print_banner():
-    """Print the startup banner explaining how the harness works."""
-    console.print(Panel(BANNER, border_style="dim"))
+def print_banner(model_name: str, backend: str):
+    """Print the startup banner with model info and a random hint."""
+    import random
+    hint = random.choice(HINTS)
+    banner = (
+        "[bold white]LLM Harness[/bold white] [dim]— local agent loop[/dim]\n"
+        "[dim]any HF model · shell · files · web · imessage · calendar[/dim]\n"
+        "\n"
+        "[dim]────────────────────────────────────────────────[/dim]\n"
+        "\n"
+        f"[dim]Model[/dim]  [white]{model_name}[/white] [dim]·[/dim] [white]{backend}[/white]\n"
+        "\n"
+        f"[dim]try: \"{hint}\"[/dim]"
+    )
+    console.print(Panel(banner, border_style="dim"))
 
 
 _last_was_streamed = False
