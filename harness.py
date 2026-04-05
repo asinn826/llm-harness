@@ -216,7 +216,7 @@ def parse_tool_call(response: str) -> Optional[dict]:
 
     # Handle Gemma `call:tool:name:<tool>,args:{key:val,...}` format —
     # colon-delimited prefix with potentially unquoted keys in the args.
-    call_colon = re.search(r'call:(?:tool:)?(?:name:)?(\w+)\s*,\s*(?:"?args"?\s*:\s*)?(\{)', text)
+    call_colon = re.search(r'call:(?:tool:)?(?:name:)?"?(\w+)"?\s*,\s*(?:"?args"?\s*:\s*)?(\{)', text)
     if call_colon:
         tool_name = call_colon.group(1)
         args_start = call_colon.start(2)
