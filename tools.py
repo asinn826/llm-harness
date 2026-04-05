@@ -761,18 +761,21 @@ def _build_email_name_map(conn):
 # ── Calendar read ───────────────────────────────────────────────────────────
 
 @permission(Permission.READ_ONLY)
-def read_calendar(start_date: str, end_date: str = "", search: str = "", calendar_name: str = "", days_ahead: int = 0) -> str:
-    """Read calendar events for a date range. Args: start_date (str) - ISO 8601 date or datetime for the start of the range (e.g. "2026-04-04" or "2026-04-04T14:00:00"), end_date (str, optional) - ISO 8601 end of range, days_ahead (int, optional) - number of days from start_date to look ahead (e.g. 90 for ~3 months; overrides end_date if both set), search (str, optional) - filter events by title or notes content, calendar_name (str, optional) - filter to a specific calendar (e.g. "Work"). If neither end_date nor days_ahead is set, defaults to 14 days. Returns: formatted event list grouped by day, or an error message."""
+def read_calendar(start_date: str = "", end_date: str = "", search: str = "", calendar_name: str = "", days_ahead: int = 0) -> str:
+    """Read calendar events for a date range. Args: start_date (str, optional) - ISO 8601 date or datetime (defaults to today), end_date (str, optional) - ISO 8601 end of range, days_ahead (int, optional) - number of days from start_date to look ahead (e.g. 90 for ~3 months; overrides end_date if both set), search (str, optional) - filter events by title or notes content, calendar_name (str, optional) - filter to a specific calendar (e.g. "Work"). If neither end_date nor days_ahead is set, defaults to 14 days. Returns: formatted event list grouped by day, or an error message."""
     conn, error = _open_calendar_db()
     if error:
         return error
 
     try:
-        # Parse start/end dates
-        try:
-            start_dt = datetime.fromisoformat(start_date)
-        except ValueError:
-            return f"Error: invalid start_date format '{start_date}'. Use ISO 8601 (e.g. 2026-04-04 or 2026-04-04T14:00:00)."
+        # Parse start/end dates (start_date defaults to today)
+        if not start_date:
+            start_dt = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        else:
+            try:
+                start_dt = datetime.fromisoformat(start_date)
+            except ValueError:
+                return f"Error: invalid start_date format '{start_date}'. Use ISO 8601 (e.g. 2026-04-04 or 2026-04-04T14:00:00)."
 
         if days_ahead > 0:
             end_dt = start_dt + timedelta(days=days_ahead)
