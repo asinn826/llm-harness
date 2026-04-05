@@ -668,10 +668,15 @@ def _send_via_messages_app(e164: str, message: str, contact: str, service_type: 
     else:
         primary, fallback = "SMS", "iMessage"
 
-    # AppleScript doesn't support backslash escaping in strings, so we pass
-    # the message via an environment variable and read it with do shell script.
+    # Write message to a temp file so AppleScript can read it with newlines
+    # preserved. Environment variables + do shell script mangles newlines.
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        f.write(message)
+        msg_file = f.name
+
     send_script = f'''
-set theMsg to do shell script "echo $MSG"
+set theMsg to read POSIX file "{msg_file}" as «class utf8»
 tell application "Messages"
     try
         set theService to 1st service whose service type = {primary}
@@ -685,8 +690,8 @@ end tell
     result = subprocess.run(
         ["osascript", "-e", send_script],
         capture_output=True, text=True, timeout=15,
-        env={**os.environ, "MSG": message},
     )
+    os.unlink(msg_file)
     if result.returncode != 0:
         return f"Error: {result.stderr.strip()}"
     return f"Message sent to {contact} via {service_type}. Check Messages.app to confirm delivery."
