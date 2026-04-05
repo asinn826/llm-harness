@@ -217,8 +217,9 @@ def load_model_hf(model_id: str):
         # Patch HF's tqdm wrapper to show a compact single-line progress bar.
         # HF imports tqdm from huggingface_hub.utils.tqdm, not from tqdm directly,
         # so we must patch that specific class.
-        import huggingface_hub.utils.tqdm as _hf_tqdm
-        _orig_hf_tqdm = _hf_tqdm.tqdm
+        import importlib
+        _hf_tqdm_module = importlib.import_module('huggingface_hub.utils.tqdm')
+        _orig_hf_tqdm = _hf_tqdm_module.tqdm
 
         class _CompactTqdm(_orig_hf_tqdm):
             """Single-line progress bar for weight loading."""
@@ -235,7 +236,7 @@ def load_model_hf(model_id: str):
                     sys.stdout.write(f"\r\033[2mLoading {model_id}  {bar} {pct:>4.0%}\033[0m")
                     sys.stdout.flush()
 
-        _hf_tqdm.tqdm = _CompactTqdm
+        _hf_tqdm_module.tqdm = _CompactTqdm
 
         try:
             processor = AutoProcessor.from_pretrained(model_id, token=token)
@@ -249,7 +250,7 @@ def load_model_hf(model_id: str):
             sys.stdout.write('\r\033[K')
             sys.stdout.flush()
         finally:
-            _hf_tqdm.tqdm = _orig_hf_tqdm
+            _hf_tqdm_module.tqdm = _orig_hf_tqdm
     except GatedRepoError:
         console.print(
             f"[red]✗ {model_id} is a gated model.[/red]\n"
