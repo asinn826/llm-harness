@@ -727,7 +727,11 @@ def _format_event(summary, start, end, all_day, description, cal_name,
     tz_label = datetime.now().astimezone().tzname() or "local"
 
     if all_day:
-        dt_start = datetime.fromtimestamp(start + APPLE_EPOCH)
+        # All-day events are stored at midnight UTC. Using fromtimestamp
+        # converts to local time which shifts the date back (e.g. Apr 6
+        # 00:00 UTC → Apr 5 17:00 PDT). Use utcfromtimestamp to get the
+        # correct calendar date.
+        dt_start = datetime.utcfromtimestamp(start + APPLE_EPOCH)
         line = f"[{dt_start.strftime('%a %b %d')}] [all day] {summary}"
     else:
         dt_start = datetime.fromtimestamp(start + APPLE_EPOCH)
@@ -863,7 +867,12 @@ def read_calendar(start_date: str = "", end_date: str = "", search: str = "", ca
         # Group by day
         days: dict[str, list[str]] = defaultdict(list)
         for rowid, summary, start, end, all_day, desc, cal_name, location, has_att in rows:
-            dt = datetime.fromtimestamp(start + APPLE_EPOCH)
+            # All-day events: use UTC date (stored at midnight UTC, local
+            # conversion shifts the date back). Timed events: use local time.
+            if all_day:
+                dt = datetime.utcfromtimestamp(start + APPLE_EPOCH)
+            else:
+                dt = datetime.fromtimestamp(start + APPLE_EPOCH)
             day_key = dt.strftime('%a %b %d')
             participants = event_participants.get(rowid, [])
             # Merge both name maps for resolution
