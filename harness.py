@@ -146,6 +146,47 @@ def _quote_toplevel_keys(raw: str) -> str:
     return ''.join(result)
 
 
+def _fix_unclosed_quotes(text: str) -> str:
+    """Fix unclosed string values in JSON-like text.
+
+    Models sometimes omit the closing quote: {"query":"hello world}
+    This walks the string tracking brace depth. When we're inside a string
+    and hit a } that would close a JSON object (depth would reach 0),
+    we insert a closing quote first. Escaped braces inside strings
+    (like echo {\\"key\\": \\"val\\"}) are left alone.
+    """
+    result = []
+    in_string = False
+    escape = False
+    depth = 0
+    for ch in text:
+        if escape:
+            result.append(ch)
+            escape = False
+            continue
+        if ch == '\\':
+            result.append(ch)
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            result.append(ch)
+            continue
+        if not in_string:
+            if ch == '{':
+                depth += 1
+            elif ch == '}':
+                depth -= 1
+        elif ch == '}' and depth <= 1:
+            # Inside a string, and this } would close the JSON object —
+            # the quote was likely meant to close before it.
+            result.append('"')
+            in_string = False
+            depth -= 1
+        result.append(ch)
+    return ''.join(result)
+
+
 def parse_tool_call(response: str) -> Optional[dict]:
     """Try to parse a tool call JSON from the model response.
 
@@ -161,6 +202,8 @@ def parse_tool_call(response: str) -> Optional[dict]:
     # Repair common model output errors before attempting to parse:
     # - missing values like "limit": ,  →  "limit": null
     text = re.sub(r':\s*,', ': null,', text)
+    # - unclosed string before } — add the missing closing quote
+    text = _fix_unclosed_quotes(text)
     # - trailing commas before } or ]
     text = re.sub(r',\s*([}\]])', r'\1', text)
 
