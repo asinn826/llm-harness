@@ -150,17 +150,78 @@ def load_model_mlx(model_id: str):
 
     mlx-lm uses the MLX framework which compiles Metal kernels for the
     Apple Neural Engine / GPU — much faster than transformers on MPS.
+    Shows a spinner until huggingface_hub's tqdm progress kicks in (for
+    downloads), then hands off to a compact progress bar.
     """
-    from mlx_lm import load
-    with thinking_spinner(f"Loading {model_id}..."):
+    import importlib
+    import threading
+
+    _spinner_stop = [False]
+
+    def _pre_load_spinner():
+        import time
+        frame = 0
+        while not _spinner_stop[0]:
+            sys.stdout.write(f"\r\033[2m{_SPINNER_FRAMES[frame % len(_SPINNER_FRAMES)]} Loading {model_id}...\033[0m")
+            sys.stdout.flush()
+            frame += 1
+            time.sleep(0.08)
+
+    # Patch huggingface_hub's tqdm to show a compact progress bar instead
+    _hf_tqdm_module = importlib.import_module('huggingface_hub.utils.tqdm')
+    _orig_hf_tqdm = _hf_tqdm_module.tqdm
+
+    class _CompactTqdm(_orig_hf_tqdm):
+        """Single-line progress bar for weight downloading."""
+        def __init__(self, *args, **kwargs):
+            _spinner_stop[0] = True  # kill the spinner
+            kwargs['disable'] = True
+            super().__init__(*args, **kwargs)
+
+        def update(self, n=1):
+            super().update(n)
+            if self.total:
+                pct = self.n / self.total
+                filled = int(20 * pct)
+                bar = '█' * filled + '░' * (20 - filled)
+                sys.stdout.write(f"\r\033[2mLoading {model_id}  {bar} {pct:>4.0%}\033[0m")
+                sys.stdout.flush()
+
+    _hf_tqdm_module.tqdm = _CompactTqdm
+    spinner_thread = threading.Thread(target=_pre_load_spinner, daemon=True)
+    spinner_thread.start()
+
+    try:
+        from mlx_lm import load
         model, tokenizer = load(model_id)
+        sys.stdout.write('\r\033[K')
+        sys.stdout.flush()
+    finally:
+        _spinner_stop[0] = True
+        _hf_tqdm_module.tqdm = _orig_hf_tqdm
+
     console.print(f"[dim]✓ Model loaded ({model_id}) via mlx-lm[/dim]\n")
     return tokenizer, model
+
+
+def _mlx_stream_kwargs():
+    """Build kwargs for mlx-lm stream_generate, adapting to API version.
+
+    Older mlx-lm accepts repetition_penalty as a direct kwarg.
+    Newer mlx-lm (0.31+) requires it via logits_processors.
+    """
+    try:
+        from mlx_lm.sample_utils import make_logits_processors
+        lp = make_logits_processors(repetition_penalty=1.2, repetition_context_size=100)
+        return {"logits_processors": [lp]}
+    except ImportError:
+        return {"repetition_penalty": 1.2, "repetition_context_size": 100}
 
 
 def make_model_fn_mlx(tokenizer, model, system_prompt: str):
     """Return a model_fn backed by mlx-lm streaming generate."""
     from mlx_lm import stream_generate
+    extra_kwargs = _mlx_stream_kwargs()
 
     def model_fn(conversation: list) -> str:
         messages = [{"role": "system", "content": system_prompt}] + conversation
@@ -182,7 +243,7 @@ def make_model_fn_mlx(tokenizer, model, system_prompt: str):
 
         return _stream_response(
             stream_generate(model, tokenizer, prompt=prompt, max_tokens=2048,
-                            repetition_penalty=1.2, repetition_context_size=100),
+                            **extra_kwargs),
         )
 
     return model_fn
@@ -237,23 +298,45 @@ def load_model_hf(model_id: str):
         spinner_thread = threading.Thread(target=_pre_load_spinner, daemon=True)
         spinner_thread.start()
 
+        _progress_lock = threading.Lock()
+
+        def _kill_spinner():
+            """Stop the spinner and clear its line (safe to call multiple times)."""
+            if not _spinner_stop[0]:
+                _spinner_stop[0] = True
+                import time
+                time.sleep(0.1)  # let spinner thread finish its cycle
+                sys.stdout.write('\r\033[K')
+                sys.stdout.flush()
+
         class _CompactTqdm(_orig_hf_tqdm):
-            """Single-line progress bar for weight loading."""
+            """Single-line progress bar that replaces all HF/transformers tqdm bars."""
             def __init__(self, *args, **kwargs):
-                _spinner_stop[0] = True  # kill the pre-load spinner
-                kwargs['disable'] = True
+                _kill_spinner()
+                # Keep tqdm enabled so __iter__ calls update(), but suppress
+                # its default output by routing it to /dev/null.
+                kwargs['file'] = open(os.devnull, 'w')
                 super().__init__(*args, **kwargs)
 
             def update(self, n=1):
                 super().update(n)
                 if self.total:
-                    pct = self.n / self.total
-                    filled = int(20 * pct)
-                    bar = '█' * filled + '░' * (20 - filled)
-                    sys.stdout.write(f"\r\033[2mLoading {model_id}  {bar} {pct:>4.0%}\033[0m")
-                    sys.stdout.flush()
+                    with _progress_lock:
+                        pct = self.n / self.total
+                        filled = int(20 * pct)
+                        bar = '█' * filled + '░' * (20 - filled)
+                        desc = self.desc or model_id
+                        sys.stdout.write(f"\r\033[2m{desc}  {bar} {pct:>4.0%}\033[0m")
+                        sys.stdout.flush()
 
         _hf_tqdm_module.tqdm = _CompactTqdm
+
+        # Transformers has its own tqdm wrapper (for "Loading checkpoint shards")
+        # that goes through tqdm.auto, not huggingface_hub. Patch it too.
+        from transformers.utils import logging as tf_logging
+        _orig_tqdm_active = tf_logging._tqdm_active
+        _orig_tqdm_lib_tqdm = tf_logging.tqdm_lib.tqdm
+        tf_logging.tqdm_lib.tqdm = _CompactTqdm
 
         try:
             processor = AutoProcessor.from_pretrained(model_id, token=token)
@@ -269,6 +352,7 @@ def load_model_hf(model_id: str):
         finally:
             _spinner_stop[0] = True
             _hf_tqdm_module.tqdm = _orig_hf_tqdm
+            tf_logging.tqdm_lib.tqdm = _orig_tqdm_lib_tqdm
     except GatedRepoError:
         console.print(
             f"[red]✗ {model_id} is a gated model.[/red]\n"
