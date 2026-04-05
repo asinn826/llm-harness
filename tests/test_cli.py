@@ -183,7 +183,29 @@ class TestGetUserInputCtrlC:
         assert "expand_last_tool_result" in source, "_stream_response should call expand_last_tool_result"
         assert "_setcbreak" in source, "_stream_response should use _setcbreak for stdin monitoring"
 
-    def test_ctrl_c_handler_is_not_keyboard_interrupt(self):
+class TestMlxApiCompat:
+    """mlx-lm API version detection for repetition penalty."""
+
+    def test_mlx_stream_kwargs_returns_dict(self):
+        """_mlx_stream_kwargs should return a dict regardless of API version."""
+        from main import _mlx_stream_kwargs
+        kwargs = _mlx_stream_kwargs()
+        assert isinstance(kwargs, dict)
+        # Should have either logits_processors (new) or repetition_penalty (old)
+        assert 'logits_processors' in kwargs or 'repetition_penalty' in kwargs
+
+    def test_mlx_stream_kwargs_new_api(self):
+        """When make_logits_processors is available, use it."""
+        try:
+            from mlx_lm.sample_utils import make_logits_processors
+            from main import _mlx_stream_kwargs
+            kwargs = _mlx_stream_kwargs()
+            assert 'logits_processors' in kwargs
+        except ImportError:
+            pytest.skip("mlx_lm.sample_utils not available")
+
+
+
         """Verify the Ctrl+C code path does NOT raise KeyboardInterrupt.
 
         We check the source to confirm the behavior — Ctrl+C (0x03)
