@@ -19,6 +19,7 @@ from harness import build_system_prompt, run_conversation_turn
 from tools import TOOLS
 import sys
 
+from rich.markdown import Markdown
 from cli import (
     console, print_banner, print_assistant, print_tool_result,
     confirm_tool, get_user_input, thinking_spinner, expand_last_tool_result,
@@ -77,9 +78,9 @@ def _stream_response(token_iter) -> str:
             if to_show:
                 sys.stdout.write('\r\033[K')  # clear spinner line
                 if displayed_up_to == 0:
-                    sys.stdout.write(f"\n\033[2m→\033[0m ")
-                sys.stdout.write(to_show + '\n\n')
-                sys.stdout.flush()
+                    console.print()
+                console.print(Markdown(to_show))
+                console.print()
             displayed_up_to += last_break + 2
 
     # Generation complete — clear spinner
@@ -98,10 +99,8 @@ def _stream_response(token_iter) -> str:
         return full
 
     if remaining:
-        sys.stdout.write(remaining + '\n\n')
-    else:
-        sys.stdout.write('\n')
-    sys.stdout.flush()
+        console.print(Markdown(remaining))
+        console.print()
     cli._last_was_streamed = True
     return full
 

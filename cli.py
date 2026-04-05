@@ -68,16 +68,21 @@ _last_was_streamed = False
 
 
 def print_assistant(message: str):
-    """Display the assistant's final plain-text response.
+    """Display the assistant's response with Markdown rendering.
 
-    Skips printing if the response was already streamed token-by-token
-    (model_fn sets _last_was_streamed when it streams).
+    Uses Rich's Markdown renderer for headers, tables, bullet lists, bold,
+    etc. Skips printing if the response was already streamed paragraph-by-
+    paragraph (model_fn sets _last_was_streamed when it streams).
     """
+    from rich.markdown import Markdown
+
     global _last_was_streamed
     if _last_was_streamed:
         _last_was_streamed = False
         return
-    console.print(f"\n[dim]→[/dim] {message}\n")
+    console.print()
+    console.print(Markdown(message))
+    console.print()
 
 
 def start_stream():
