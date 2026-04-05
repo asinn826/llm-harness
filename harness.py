@@ -130,6 +130,61 @@ When calling calendar tools, always convert relative dates ("tomorrow", "next Th
 CRITICAL: URLs and file paths must be copied EXACTLY as the user wrote them. Do not fix typos, add missing letters, or modify them in any way. If the user says "alfredsin.com", use "alfredsin.com" — not "alfredsins.com" or any other variation."""
 
 
+def _quote_toplevel_keys(raw: str) -> str:
+    """Quote unquoted JSON keys at the top level only.
+
+    Naively applying \\w+: → "\\w+": breaks content inside string values
+    (e.g. "07:00" becomes "07":00). This function walks the string and only
+    quotes keys that appear outside of quoted strings at brace depth 1.
+    """
+    result = []
+    in_string = False
+    escape = False
+    depth = 0
+    i = 0
+    while i < len(raw):
+        ch = raw[i]
+        if escape:
+            result.append(ch)
+            escape = False
+            i += 1
+            continue
+        if ch == '\\' and in_string:
+            result.append(ch)
+            escape = True
+            i += 1
+            continue
+        if ch == '"':
+            in_string = not in_string
+            result.append(ch)
+            i += 1
+            continue
+        if in_string:
+            result.append(ch)
+            i += 1
+            continue
+        if ch == '{':
+            depth += 1
+            result.append(ch)
+            i += 1
+            continue
+        if ch == '}':
+            depth -= 1
+            result.append(ch)
+            i += 1
+            continue
+        # At depth 1, outside strings: look for unquoted keys (word:)
+        if depth == 1:
+            m = re.match(r'(\w+)\s*:', raw[i:])
+            if m and (not result or result[-1] in ('{', ',', ' ', '\n')):
+                result.append(f'"{m.group(1)}":')
+                i += m.end()
+                continue
+        result.append(ch)
+        i += 1
+    return ''.join(result)
+
+
 def parse_tool_call(response: str) -> Optional[dict]:
     """Try to parse a tool call JSON from the model response.
 
@@ -140,7 +195,6 @@ def parse_tool_call(response: str) -> Optional[dict]:
     models wrap JSON in fences or add text before the JSON even when instructed
     not to.
     """
-    # Strip markdown code fences if present
     text = re.sub(r"```(?:json)?\s*(.*?)\s*```", r"\1", response, flags=re.DOTALL).strip()
 
     # Repair common model output errors before attempting to parse:
@@ -241,10 +295,21 @@ def parse_tool_call(response: str) -> Optional[dict]:
                     depth -= 1
                 if depth == 0:
                     raw = text[args_start:j + 1]
-                    raw = re.sub(r'(?<=[{,])\s*(\w+)\s*:', r' "\1":', raw)
-                    raw = re.sub(r',\s*([}\]])', r'\1', raw)
+                    # Try parsing as-is first (keys might already be quoted)
+                    raw_cleaned = re.sub(r',\s*([}\]])', r'\1', raw)
                     try:
-                        args = json.loads(raw)
+                        args = json.loads(raw_cleaned)
+                        return {"tool": tool_name, "args": args}
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+                    # Retry with unquoted key repair — but only quote keys
+                    # at brace depth 1 (top-level), not inside string values.
+                    # Simple heuristic: only quote \w+: when preceded by { or
+                    # a comma that's NOT inside a quoted string.
+                    repaired = _quote_toplevel_keys(raw)
+                    repaired = re.sub(r',\s*([}\]])', r'\1', repaired)
+                    try:
+                        args = json.loads(repaired)
                         return {"tool": tool_name, "args": args}
                     except (json.JSONDecodeError, ValueError):
                         pass
