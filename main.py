@@ -214,7 +214,35 @@ def load_model_hf(model_id: str):
     warnings.filterwarnings("ignore", message=".*unauthenticated.*", category=UserWarning)
 
     try:
-        with thinking_spinner(f"Loading {model_id}..."):
+        # Suppress HF's multi-line tqdm progress bar and show a compact
+        # single-line version via our own callback.
+        from tqdm import tqdm as _orig_tqdm
+        import tqdm as _tqdm_module
+        import functools
+
+        _load_pbar = [None]
+
+        class _CompactTqdm(_orig_tqdm):
+            """Compact tqdm that updates a single line with percentage."""
+            def __init__(self, *args, **kwargs):
+                kwargs['disable'] = True  # suppress default output
+                super().__init__(*args, **kwargs)
+                _load_pbar[0] = self
+
+            def update(self, n=1):
+                super().update(n)
+                if self.total:
+                    pct = self.n / self.total
+                    bar_len = 20
+                    filled = int(bar_len * pct)
+                    bar = '█' * filled + '░' * (bar_len - filled)
+                    sys.stdout.write(f"\r\033[2mLoading {model_id}  {bar} {pct:>4.0%}\033[0m")
+                    sys.stdout.flush()
+
+        _tqdm_module.tqdm = _CompactTqdm
+        _tqdm_module.auto.tqdm = _CompactTqdm
+
+        try:
             processor = AutoProcessor.from_pretrained(model_id, token=token)
             model = AutoModelForCausalLM.from_pretrained(
                 model_id,
@@ -223,6 +251,11 @@ def load_model_hf(model_id: str):
                 token=token,
             )
             model.eval()
+            sys.stdout.write('\r\033[K')
+            sys.stdout.flush()
+        finally:
+            _tqdm_module.tqdm = _orig_tqdm
+            _tqdm_module.auto.tqdm = _orig_tqdm
     except GatedRepoError:
         console.print(
             f"[red]✗ {model_id} is a gated model.[/red]\n"
