@@ -54,14 +54,33 @@ HINTS = [
     "search the web for ...",
 ]
 
+LLAMA = (
+    "[bold #f5a623]   ╭╮  ╭╮[/bold #f5a623]\n"
+    "[bold #f5a623]   ├╰──╯┤[/bold #f5a623]\n"
+    "[bold #f5a623]   │[/bold #f5a623][bold white] ◉◉ [/bold white][bold #f5a623]│[/bold #f5a623]\n"
+    "[bold #f5a623]   │[/bold #f5a623][#888888]  ◡ [/#888888][bold #f5a623]│[/bold #f5a623]\n"
+    "[bold #f5a623]   ╰────╯[/bold #f5a623]"
+)
+
 
 def print_banner(model_name: str, backend: str):
     """Print the startup banner with model info and a random hint."""
     import random
     hint = random.choice(HINTS)
+    llama_lines = LLAMA.split("\n")
+    info_lines = [
+        "[bold white]LLM Harness[/bold white] [dim]— local agent loop[/dim]",
+        "[dim]any HF model · shell · files ·[/dim]",
+        "[dim]web · imessage · calendar[/dim]",
+    ]
+    # Pair llama art with info text side by side
+    combined = []
+    for i in range(max(len(llama_lines), len(info_lines))):
+        left = llama_lines[i] if i < len(llama_lines) else "          "
+        right = f"   {info_lines[i]}" if i < len(info_lines) else ""
+        combined.append(f"{left}{right}")
     banner = (
-        "[bold white]LLM Harness[/bold white] [dim]— local agent loop[/dim]\n"
-        "[dim]any HF model · shell · files · web · imessage · calendar[/dim]\n"
+        "\n".join(combined) + "\n"
         "\n"
         "[dim]────────────────────────────────────────────────[/dim]\n"
         "\n"
@@ -115,7 +134,15 @@ def end_stream():
 
 def print_tool_call(tool_name: str, args: dict):
     """Display an incoming tool call request."""
-    args_str = ", ".join(f"{k}={repr(v)}" for k, v in args.items())
+    def _display_val(v):
+        if isinstance(v, str):
+            # Clean up for display: collapse newlines, truncate long values
+            clean = v.replace('\n', ' ').replace('  ', ' ').strip()
+            if len(clean) > 120:
+                clean = clean[:120] + '...'
+            return repr(clean)
+        return repr(v)
+    args_str = ", ".join(f"{k}={_display_val(v)}" for k, v in args.items())
     console.print(f"\n[bold white]⚙ Tool call:[/bold white] [white]{tool_name}[/white]({args_str})")
 
 
