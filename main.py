@@ -221,9 +221,26 @@ def load_model_hf(model_id: str):
         _hf_tqdm_module = importlib.import_module('huggingface_hub.utils.tqdm')
         _orig_hf_tqdm = _hf_tqdm_module.tqdm
 
+        _spinner_stop = [False]
+
+        def _pre_load_spinner():
+            """Show a spinner until the first tqdm progress bar appears."""
+            import time
+            frame = 0
+            while not _spinner_stop[0]:
+                sys.stdout.write(f"\r\033[2m{_SPINNER_FRAMES[frame % len(_SPINNER_FRAMES)]} Loading {model_id}...\033[0m")
+                sys.stdout.flush()
+                frame += 1
+                time.sleep(0.08)
+
+        import threading
+        spinner_thread = threading.Thread(target=_pre_load_spinner, daemon=True)
+        spinner_thread.start()
+
         class _CompactTqdm(_orig_hf_tqdm):
             """Single-line progress bar for weight loading."""
             def __init__(self, *args, **kwargs):
+                _spinner_stop[0] = True  # kill the pre-load spinner
                 kwargs['disable'] = True
                 super().__init__(*args, **kwargs)
 
@@ -250,6 +267,7 @@ def load_model_hf(model_id: str):
             sys.stdout.write('\r\033[K')
             sys.stdout.flush()
         finally:
+            _spinner_stop[0] = True
             _hf_tqdm_module.tqdm = _orig_hf_tqdm
     except GatedRepoError:
         console.print(
