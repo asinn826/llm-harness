@@ -762,7 +762,7 @@ def _build_email_name_map(conn):
 
 @permission(Permission.READ_ONLY)
 def read_calendar(start_date: str, end_date: str = "", search: str = "", calendar_name: str = "") -> str:
-    """Read calendar events for a date range. Args: start_date (str) - ISO 8601 date or datetime for the start of the range (e.g. "2026-04-04" or "2026-04-04T14:00:00"), end_date (str, optional) - ISO 8601 end of range (defaults to end of start_date's day), search (str, optional) - filter events by title or notes content, calendar_name (str, optional) - filter to a specific calendar (e.g. "Work", "ASIN + MWU shared calendar"). Returns: formatted event list grouped by day, or an error message."""
+    """Read calendar events for a date range. Args: start_date (str) - ISO 8601 date or datetime for the start of the range (e.g. "2026-04-04" or "2026-04-04T14:00:00"), end_date (str, optional) - ISO 8601 end of range (defaults to 14 days from start_date), search (str, optional) - filter events by title or notes content, calendar_name (str, optional) - filter to a specific calendar (e.g. "Work"). Returns: formatted event list grouped by day, or an error message."""
     conn, error = _open_calendar_db()
     if error:
         return error
@@ -780,8 +780,9 @@ def read_calendar(start_date: str, end_date: str = "", search: str = "", calenda
             except ValueError:
                 return f"Error: invalid end_date format '{end_date}'. Use ISO 8601."
         else:
-            # Default to end of start_date's day
-            end_dt = start_dt.replace(hour=23, minute=59, second=59)
+            # Default to 14 days from start — "what's on my calendar" almost
+            # always means "from here forward," not "just this one day."
+            end_dt = start_dt + timedelta(days=14)
 
         # Convert to Apple epoch seconds
         start_apple = start_dt.timestamp() - APPLE_EPOCH
