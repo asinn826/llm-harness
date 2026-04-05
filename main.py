@@ -213,7 +213,7 @@ def _mlx_stream_kwargs():
     try:
         from mlx_lm.sample_utils import make_logits_processors
         lp = make_logits_processors(repetition_penalty=1.2, repetition_context_size=100)
-        return {"logits_processors": [lp]}
+        return {"logits_processors": lp}
     except ImportError:
         return {"repetition_penalty": 1.2, "repetition_context_size": 100}
 
