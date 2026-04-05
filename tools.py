@@ -761,8 +761,8 @@ def _build_email_name_map(conn):
 # ── Calendar read ───────────────────────────────────────────────────────────
 
 @permission(Permission.READ_ONLY)
-def read_calendar(start_date: str, end_date: str = "", search: str = "") -> str:
-    """Read calendar events for a date range. Args: start_date (str) - ISO 8601 date or datetime for the start of the range (e.g. "2026-04-04" or "2026-04-04T14:00:00"), end_date (str, optional) - ISO 8601 end of range (defaults to end of start_date's day), search (str, optional) - filter events by title or notes content. Returns: formatted event list grouped by day, or an error message."""
+def read_calendar(start_date: str, end_date: str = "", search: str = "", calendar_name: str = "") -> str:
+    """Read calendar events for a date range. Args: start_date (str) - ISO 8601 date or datetime for the start of the range (e.g. "2026-04-04" or "2026-04-04T14:00:00"), end_date (str, optional) - ISO 8601 end of range (defaults to end of start_date's day), search (str, optional) - filter events by title or notes content, calendar_name (str, optional) - filter to a specific calendar (e.g. "Work", "ASIN + MWU shared calendar"). Returns: formatted event list grouped by day, or an error message."""
     conn, error = _open_calendar_db()
     if error:
         return error
@@ -790,11 +790,14 @@ def read_calendar(start_date: str, end_date: str = "", search: str = "") -> str:
         cursor = conn.cursor()
 
         # Build query with optional search filter
-        search_filter = ""
+        extra_filters = ""
         params = [start_apple, end_apple]
         if search:
-            search_filter = "AND (ci.summary LIKE ? OR ci.description LIKE ?)"
+            extra_filters += " AND (ci.summary LIKE ? OR ci.description LIKE ?)"
             params.extend([f"%{search}%", f"%{search}%"])
+        if calendar_name:
+            extra_filters += " AND cal.title LIKE ?"
+            params.append(f"%{calendar_name}%")
 
         cursor.execute(f"""
             SELECT ci.ROWID, ci.summary, ci.start_date, ci.end_date, ci.all_day,
@@ -806,13 +809,18 @@ def read_calendar(start_date: str, end_date: str = "", search: str = "") -> str:
             WHERE ci.start_date >= ? AND ci.start_date < ?
             AND ci.hidden = 0
             AND ci.entity_type != 4
-            {search_filter}
+            {extra_filters}
             ORDER BY ci.start_date, ci.all_day DESC
         """, params)
 
         rows = cursor.fetchall()
         if not rows:
-            return f"No events found between {start_dt.strftime('%b %d')} and {end_dt.strftime('%b %d')}."
+            filters = f"between {start_dt.strftime('%b %d')} and {end_dt.strftime('%b %d')}"
+            if calendar_name:
+                filters += f" in calendar '{calendar_name}'"
+            if search:
+                filters += f" matching '{search}'"
+            return f"No events found {filters}."
 
         # Build name maps for attendee resolution
         name_map = _build_email_name_map(conn)
@@ -849,15 +857,8 @@ def read_calendar(start_date: str, end_date: str = "", search: str = "") -> str:
             days[day_key].append(line)
 
         sections = []
-        total_chars = 0
-        max_chars = 4000  # cap output to avoid overwhelming the model's context
         for day, events in days.items():
-            section = f"--- {day} ---\n" + "\n".join(f"  {e}" for e in events)
-            if total_chars + len(section) > max_chars and sections:
-                sections.append(f"... (truncated — {len(days) - len(sections)} more days)")
-                break
-            sections.append(section)
-            total_chars += len(section)
+            sections.append(f"--- {day} ---\n" + "\n".join(f"  {e}" for e in events))
         return "\n\n".join(sections)
     finally:
         conn.close()

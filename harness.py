@@ -120,8 +120,10 @@ When composing messages to send, always rewrite from the recipient's point of vi
 - "block off 2-4pm tomorrow" → {{"tool": "create_event", "args": {{"title": "Focus time", "start_time": "<tomorrow>T14:00:00", "end_time": "<tomorrow>T16:00:00"}}}}
 - "what calendars do I have?" → {{"tool": "list_calendars", "args": {{}}}}
 - "add a dentist appointment to my Work calendar May 5th at 10am" → {{"tool": "create_event", "args": {{"title": "Dentist appointment", "start_time": "2026-05-05T10:00:00", "calendar": "Work"}}}}
+- "what's coming up on the shared calendar?" → {{"tool": "read_calendar", "args": {{"start_date": "{today_iso}", "end_date": "<a few months out>", "calendar_name": "shared"}}}}
+- "anything interesting in my Work calendar this month?" → {{"tool": "read_calendar", "args": {{"start_date": "{today_iso}", "end_date": "<end of month>", "calendar_name": "Work"}}}}
 
-When calling calendar tools, always convert relative dates ("tomorrow", "next Thursday", "this weekend") to ISO 8601 dates using today's date.
+When calling calendar tools, always convert relative dates ("tomorrow", "next Thursday", "this weekend") to ISO 8601 dates using today's date. When the user mentions a specific calendar by name, pass it as calendar_name to filter results — this avoids returning hundreds of holiday/birthday events from other calendars.
 
 CRITICAL: URLs and file paths must be copied EXACTLY as the user wrote them. Do not fix typos, add missing letters, or modify them in any way. If the user says "alfredsin.com", use "alfredsin.com" — not "alfredsins.com" or any other variation."""
 
