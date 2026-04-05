@@ -253,7 +253,7 @@ def parse_tool_call(response: str) -> Optional[dict]:
     return None
 
 
-def confirm_and_run(tool_call: dict, tools: dict, confirm_fn=None, result_fn=None) -> str:
+def confirm_and_run(tool_call: dict, tools: dict, confirm_fn=None, result_fn=None, display_fn=None) -> str:
     """Ask user to confirm, then run the tool. Returns the result as a string.
 
     confirm_fn: callable(tool_name: str, args: dict) -> bool
@@ -262,6 +262,10 @@ def confirm_and_run(tool_call: dict, tools: dict, confirm_fn=None, result_fn=Non
 
     result_fn: callable(result: str) -> None — called after the tool runs, for display.
       If None, the result is returned but not displayed.
+
+    display_fn: callable(tool_name: str, args: dict) -> None — displays the tool
+      call without asking for confirmation. Used for READ_ONLY tools so the user
+      sees what's happening even though no approval is needed.
 
     Keeping confirm_fn injectable is what makes this function testable without
     any terminal interaction.
@@ -275,18 +279,23 @@ def confirm_and_run(tool_call: dict, tools: dict, confirm_fn=None, result_fn=Non
     # Drop null args so function defaults kick in rather than passing None
     args = {k: v for k, v in args.items() if v is not None}
 
-    # Read-only tools run automatically — no confirmation needed.
-    # Tools without a permission annotation default to requiring confirmation
-    # (fail-safe: unknown tools are treated as potentially destructive).
+    # Always display the tool call so the user sees what's happening,
+    # even for read-only tools that don't need confirmation.
     needs_confirmation = getattr(tools[tool_name], "needs_confirmation", True)
 
-    if not needs_confirmation:
-        approved = True
-    elif confirm_fn is None:
-        print(f"[Tool call] {tool_name}({args})")
-        approved = input("Run this? [y/n]: ").strip().lower() == "y"
+    if needs_confirmation:
+        if confirm_fn is None:
+            print(f"[Tool call] {tool_name}({args})")
+            approved = input("Run this? [y/n]: ").strip().lower() == "y"
+        else:
+            approved = confirm_fn(tool_name, args)
     else:
-        approved = confirm_fn(tool_name, args)
+        # Read-only: show the call but don't ask for approval
+        if display_fn is not None:
+            display_fn(tool_name, args)
+        elif confirm_fn is None:
+            print(f"[Tool call] {tool_name}({args})")
+        approved = True
 
     if not approved:
         return "Tool call denied by user."
@@ -309,6 +318,7 @@ def run_conversation_turn(
     tools: dict,
     confirm_fn=None,
     result_fn=None,
+    display_fn=None,
     max_iterations: int = 10,
 ) -> str:
     """Run one full conversation turn and return the final assistant response.
@@ -339,7 +349,7 @@ def run_conversation_turn(
 
         # Tool call — confirm, run, inject result, loop again
         conversation.append({"role": "assistant", "content": response})
-        result = confirm_and_run(tool_call, tools, confirm_fn=confirm_fn, result_fn=result_fn)
+        result = confirm_and_run(tool_call, tools, confirm_fn=confirm_fn, result_fn=result_fn, display_fn=display_fn)
         conversation.append({"role": "tool", "content": result})
 
     fallback = "Reached maximum tool call iterations."

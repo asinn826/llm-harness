@@ -21,7 +21,7 @@ import sys
 
 from rich.markdown import Markdown
 from cli import (
-    console, print_banner, print_assistant, print_tool_result,
+    console, print_banner, print_assistant, print_tool_call, print_tool_result,
     confirm_tool, get_user_input, thinking_spinner, expand_last_tool_result,
 )
 
@@ -302,6 +302,7 @@ def main():
             TOOLS,
             confirm_fn=confirm_tool,
             result_fn=print_tool_result,
+            display_fn=print_tool_call,
         )
 
         print_assistant(response)
