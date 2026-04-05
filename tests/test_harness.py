@@ -254,6 +254,24 @@ def test_parse_tool_call_flat_call_multiple_args():
     assert result["args"]["limit"] == 5
 
 
+def test_parse_tool_call_colon_delimited_format():
+    """Gemma call:tool:name:<tool>,args:{unquoted_key:val} format."""
+    response = 'call:tool:name:read_calendar,args:{end_date:"2026-04-11",start_date:"2026-04-04"}}'
+    result = parse_tool_call(response)
+    assert result is not None
+    assert result["tool"] == "read_calendar"
+    assert result["args"]["start_date"] == "2026-04-04"
+    assert result["args"]["end_date"] == "2026-04-11"
+
+
+def test_parse_tool_call_colon_format_without_tool_prefix():
+    """call:read_calendar,args:{...} without the tool:name: prefix."""
+    response = 'call:read_calendar,args:{"start_date":"2026-04-04"}'
+    result = parse_tool_call(response)
+    assert result is not None
+    assert result["tool"] == "read_calendar"
+
+
 # ── confirm_and_run edge cases ──────────────────────────────────────────────
 
 def test_confirm_and_run_unknown_tool():

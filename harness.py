@@ -214,6 +214,30 @@ def parse_tool_call(response: str) -> Optional[dict]:
         except (json.JSONDecodeError, ValueError):
             pass
 
+    # Handle Gemma `call:tool:name:<tool>,args:{key:val,...}` format —
+    # colon-delimited prefix with potentially unquoted keys in the args.
+    call_colon = re.search(r'call:(?:tool:)?(?:name:)?(\w+)\s*,\s*(?:"?args"?\s*:\s*)?(\{)', text)
+    if call_colon:
+        tool_name = call_colon.group(1)
+        args_start = call_colon.start(2)
+        depth = 0
+        for j in range(args_start, len(text)):
+            if text[j] == '{':
+                depth += 1
+            elif text[j] == '}':
+                depth -= 1
+            if depth == 0:
+                raw = text[args_start:j + 1]
+                # Quote unquoted keys: word_chars: → "word_chars":
+                raw = re.sub(r'(?<=[{,])\s*(\w+)\s*:', r' "\1":', raw)
+                raw = re.sub(r',\s*([}\]])', r'\1', raw)
+                try:
+                    args = json.loads(raw)
+                    return {"tool": tool_name, "args": args}
+                except (json.JSONDecodeError, ValueError):
+                    pass
+                break
+
     return None
 
 
