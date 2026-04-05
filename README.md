@@ -8,10 +8,8 @@ Claude code at home:
 
 ```bash
 pip install -r requirements.txt
-python3 main.py --model Qwen/Qwen2.5-1.5B-Instruct                 # fast, less capable
-python3 main.py --model Qwen/Qwen2.5-7B-Instruct                   # good balance
-python3 main.py --model mlx-community/Qwen2.5-14B-Instruct-4bit    # recommended sweet spot
-python3.11 main.py --model google/gemma-4-E4B-it --no-mlx          # Gemma 4 (requires Python 3.11+)
+python3.11 main.py --model mlx-community/Qwen3.5-9B-MLX-4bit       # recommended — fast, reliable tool use
+python3.11 main.py --model google/gemma-4-E4B-it --no-mlx          # Gemma 4 (requires --no-mlx)
 ```
 
 ## HuggingFace token
@@ -26,32 +24,33 @@ Get a token at huggingface.co/settings/tokens. For gated models, you also need t
 
 ## Model recommendations
 
-Tested on Apple Silicon (36GB unified memory). Larger models follow instructions more reliably and need fewer few-shot examples in the prompt.
+Tested on Apple Silicon (36GB unified memory). Larger models follow instructions more reliably and handle longer tool chains.
 
 On Apple Silicon, [mlx-lm](https://github.com/ml-explore/mlx-examples/tree/main/llms) is used automatically (5-10x faster than HuggingFace transformers on MPS). Pass `--no-mlx` to force the HuggingFace backend.
 
-Use pre-quantized `mlx-community` models — fp16 models are too large to run even at 14B on 36GB once you account for the KV cache and Metal overhead.
+| Model | Size | Backend | Notes |
+|---|---|---|---|
+| `mlx-community/Qwen3.5-9B-MLX-4bit` | ~5GB | mlx-lm | **Recommended** — fast, reliable tool use, handles multi-step chains |
+| `Qwen/Qwen3.5-4B` | ~8GB | mlx-lm | Smaller/faster, good for simple tasks |
+| `mlx-community/Qwen3.5-27B-4bit-DWQ` | ~15GB | mlx-lm | Best quality, fits in 36GB |
+| `google/gemma-4-E4B-it` | ~8GB | HF (`--no-mlx`) | Multimodal, creative but inconsistent tool call formatting |
+| `mistralai/Mistral-7B-Instruct-v0.3` | ~14GB | mlx-lm | Good alternative; strong JSON formatting |
+| `meta-llama/Llama-3.1-8B-Instruct` | ~16GB | mlx-lm | Solid at the 8B tier |
 
-| Model | Size | Notes |
-|---|---|---|
-| `Qwen/Qwen2.5-1.5B-Instruct` | ~3GB | Struggles with tool use, needs heavy prompting |
-| `Qwen/Qwen2.5-7B-Instruct` | ~14GB | Decent, still misses edge cases |
-| `mlx-community/Qwen2.5-14B-Instruct-4bit` | ~8GB | Recommended — good tool use, fast |
-| `mlx-community/Qwen2.5-32B-Instruct-4bit` | ~18GB | Best quality, still fits in 36GB |
-| `mistralai/Mistral-7B-Instruct-v0.3` | ~14GB | Good alternative; strong JSON formatting |
-| `meta-llama/Llama-3.1-8B-Instruct` | ~16GB | Another solid alternative at the 7-8B tier |
+### Known model quirks
 
-Models that support it (e.g. Gemma 4) are loaded via the `--no-mlx` HuggingFace backend. mlx-lm support for newer architectures lags a few days behind releases.
+- **Gemma 4**: produces many `call:` format variations instead of clean JSON. The harness parser handles most of them, but multi-step chains (3+ tools) are unreliable at 4B. Requires `--no-mlx` and Python 3.11+.
+- **Small models (<4B)**: prone to repetition loops (mitigated by repetition penalty), ignoring system prompt rules, and dropping tool chains mid-execution.
+- **Qwen 3.5 9B**: most reliable for tool calling in our testing. Handles 3-4 step chains, follows message formatting rules, and produces clean JSON.
 
-```bash
-python3.11 main.py --model google/gemma-4-E4B-it --no-mlx
-```
+### Gemma 4 setup
 
-Gemma 4 requires Python 3.10+ and the following extras:
+Gemma 4 requires the HuggingFace backend (`--no-mlx`), Python 3.10+, and extra dependencies:
 
 ```bash
 pip3.11 install torch accelerate torchvision pillow
 pip3.11 install git+https://github.com/huggingface/transformers.git
+python3.11 main.py --model google/gemma-4-E4B-it --no-mlx
 ```
 
 ## Chain-of-thought
@@ -74,7 +73,7 @@ Then run with `python3.11` and `pip3.11`.
 
 | File | Purpose |
 |---|---|
-| `tools.py` | What the model can do |
-| `harness.py` | The generation + tool-call loop |
-| `cli.py` | Terminal UI |
-| `main.py` | Entry point |
+| `tools.py` | What the model can do (shell, files, calculator, web, iMessage, calendar) |
+| `harness.py` | The generation + tool-call loop + system prompt |
+| `cli.py` | Terminal UI (raw input, Ctrl+O overlay, streaming, Markdown rendering) |
+| `main.py` | Entry point (model loading, streaming, MLX/HF backend selection) |
