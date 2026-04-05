@@ -551,6 +551,7 @@ def send_imessage(contact: str, message: str = "", area_code: str = "", label: s
     phone_selection = _build_phone_selection(contact, area_code, label)
     lookup_script = f'''
 tell application "Contacts" to launch
+delay 0.5
 tell application "Contacts"
     set matchingPeople to (every person whose name contains "{contact}")
     if (count of matchingPeople) is 0 then
@@ -848,8 +849,15 @@ def read_calendar(start_date: str, end_date: str = "", search: str = "") -> str:
             days[day_key].append(line)
 
         sections = []
+        total_chars = 0
+        max_chars = 4000  # cap output to avoid overwhelming the model's context
         for day, events in days.items():
-            sections.append(f"--- {day} ---\n" + "\n".join(f"  {e}" for e in events))
+            section = f"--- {day} ---\n" + "\n".join(f"  {e}" for e in events)
+            if total_chars + len(section) > max_chars and sections:
+                sections.append(f"... (truncated — {len(days) - len(sections)} more days)")
+                break
+            sections.append(section)
+            total_chars += len(section)
         return "\n\n".join(sections)
     finally:
         conn.close()
