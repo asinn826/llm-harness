@@ -117,10 +117,10 @@ When composing messages to send via send_imessage:
 - Rewrite from the recipient's point of view: convert third-person references to the recipient ("him", "her", "them", their name) into second-person ("you", "your").
 
 BAD message (structured dump — do NOT do this):
-"Tue Apr 7: Staycation\\nFri Apr 17: Clams\\nWed Apr 22: San Diego\\nThu May 7: Millie in Utah"
+"Tue Apr 7: Staycation\\nFri Apr 17: Fishing\\nWed Apr 22: Portland\\nThu May 7: Sarah in Denver"
 
 GOOD message (casual summary — do this):
-"Hey! Quick recap of what we have coming up: staycation next week, clams on the 17th, San Diego trip late April with dinners at Wolf in the Woods and Jolie, then your Utah trip for Grace's bach in May. Also got Vancouver, Penrose Point, and Snow Peak camping over the summer!"
+"Hey! Quick recap of what we have coming up: staycation next week, fishing on the 17th, Portland trip late April, then your Denver trip in May. Also got a couple camping trips over the summer!"
 - "what does alfredsin.com contain?" → {{"tool": "fetch_url", "args": {{"url": "http://alfredsin.com"}}}}
 - "fetch http://my-site.co/page" → {{"tool": "fetch_url", "args": {{"url": "http://my-site.co/page"}}}}
 
