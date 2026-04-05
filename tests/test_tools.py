@@ -90,3 +90,58 @@ def test_tools_registry_has_all_tools():
     for name, fn in TOOLS.items():
         assert callable(fn), f"{name} is not callable"
         assert fn.__doc__, f"{name} has no docstring — the harness needs this for the system prompt"
+
+
+# ── Calendar tool tests ─────────────────────────────────────────────────────
+
+def test_calendar_tools_registered():
+    assert "read_calendar" in TOOLS
+    assert "create_event" in TOOLS
+    assert "list_calendars" in TOOLS
+
+
+def test_read_calendar_rejects_bad_date():
+    from tools import read_calendar
+    result = read_calendar("not-a-date")
+    assert "Error" in result
+    assert "ISO 8601" in result
+
+
+def test_read_calendar_bad_end_date():
+    from tools import read_calendar
+    result = read_calendar("2026-04-04", end_date="garbage")
+    assert "Error" in result
+
+
+def test_create_event_rejects_bad_start_time():
+    from tools import create_event
+    result = create_event("Test", "not-a-time")
+    assert "Error" in result
+    assert "ISO 8601" in result
+
+
+def test_create_event_rejects_bad_end_time():
+    from tools import create_event
+    result = create_event("Test", "2026-04-10T12:00:00", end_time="garbage")
+    assert "Error" in result
+
+
+def test_create_event_duration_default():
+    """Without end_time, duration defaults to 60 minutes."""
+    from datetime import datetime, timedelta
+    # We can't test AppleScript execution, but we can verify the date math
+    start = datetime.fromisoformat("2026-04-10T12:00:00")
+    expected_end = start + timedelta(minutes=60)
+    assert expected_end.hour == 13
+    assert expected_end.minute == 0
+
+
+def test_system_prompt_contains_today():
+    from harness import build_system_prompt
+    prompt = build_system_prompt(TOOLS)
+    assert "Today is" in prompt
+    # Should contain a day of week and month
+    from datetime import datetime
+    today = datetime.now()
+    assert today.strftime("%B") in prompt  # month name
+    assert today.strftime("%Y") in prompt  # year

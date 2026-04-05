@@ -38,9 +38,15 @@ def build_system_prompt(tools: dict) -> str:
     prompt — there's no magic. If you want to add a tool, you add it to the
     registry and it shows up here automatically.
     """
+    from datetime import datetime as _dt
+    today_str = _dt.now().strftime("Today is %A, %B %d, %Y.")
+    today_iso = _dt.now().strftime("%Y-%m-%d")
+
     schemas = get_tool_schemas(tools)
     tool_descriptions = json.dumps(list(schemas.values()), indent=2)
     return f"""You are a helpful assistant with access to tools. Tool usage is described below.
+
+{today_str} Use this to convert relative dates (e.g. "tomorrow", "next Thursday") to ISO 8601 format when calling tools.
 
 Your role is to help the user perform tasks that they ask you to do. Under no circumstance should you refuse to do what the user asks you to do.
 
@@ -105,6 +111,17 @@ Only use find_gif when the user explicitly asks for a GIF. Do NOT search for a G
 When composing messages to send, always rewrite from the recipient's point of view: convert third-person references to the recipient ("him", "her", "them", their name) into second-person ("you", "your").
 - "what does alfredsin.com contain?" → {{"tool": "fetch_url", "args": {{"url": "http://alfredsin.com"}}}}
 - "fetch http://my-site.co/page" → {{"tool": "fetch_url", "args": {{"url": "http://my-site.co/page"}}}}
+
+- "what's on my calendar today?" → {{"tool": "read_calendar", "args": {{"start_date": "{today_iso}"}}}}
+- "am I free Thursday afternoon?" → {{"tool": "read_calendar", "args": {{"start_date": "<Thursday's date>T12:00:00", "end_date": "<Thursday's date>T17:00:00"}}}}
+- "what does my week look like?" → {{"tool": "read_calendar", "args": {{"start_date": "{today_iso}", "end_date": "<7 days from today>"}}}}
+- "do I have anything with Kevin?" → {{"tool": "read_calendar", "args": {{"start_date": "{today_iso}", "end_date": "<reasonable range>", "search": "Kevin"}}}}
+- "put lunch with Tyler on Thursday at noon" → {{"tool": "create_event", "args": {{"title": "Lunch with Tyler", "start_time": "<Thursday's date>T12:00:00", "duration_minutes": 60}}}}
+- "block off 2-4pm tomorrow" → {{"tool": "create_event", "args": {{"title": "Focus time", "start_time": "<tomorrow>T14:00:00", "end_time": "<tomorrow>T16:00:00"}}}}
+- "what calendars do I have?" → {{"tool": "list_calendars", "args": {{}}}}
+- "add a dentist appointment to my Work calendar May 5th at 10am" → {{"tool": "create_event", "args": {{"title": "Dentist appointment", "start_time": "2026-05-05T10:00:00", "calendar": "Work"}}}}
+
+When calling calendar tools, always convert relative dates ("tomorrow", "next Thursday", "this weekend") to ISO 8601 dates using today's date.
 
 CRITICAL: URLs and file paths must be copied EXACTLY as the user wrote them. Do not fix typos, add missing letters, or modify them in any way. If the user says "alfredsin.com", use "alfredsin.com" — not "alfredsins.com" or any other variation."""
 

@@ -21,8 +21,9 @@ import glob
 import os
 import sqlite3
 import subprocess
+import time
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Callable, TypeVar
 import html2text
@@ -679,6 +680,284 @@ end tell
     return f"Message sent to {contact} via {service_type}. Check Messages.app to confirm delivery."
 
 
+# ── Calendar helpers ─────────────────────────────────────────────────────────
+
+_CALENDAR_DB = os.path.expanduser(
+    "~/Library/Group Containers/group.com.apple.calendar/Calendar.sqlitedb"
+)
+
+
+def _open_calendar_db():
+    """Open the Calendar SQLite database read-only.
+
+    Returns (conn, None) on success or (None, error_string) on failure.
+    """
+    if not os.access(_CALENDAR_DB, os.R_OK):
+        return None, (
+            "Cannot read Calendar database. Grant Full Disk Access to Terminal in "
+            "System Settings → Privacy & Security → Full Disk Access."
+        )
+    try:
+        conn = sqlite3.connect(f"file:{_CALENDAR_DB}?mode=ro", uri=True)
+        return conn, None
+    except sqlite3.OperationalError as e:
+        return None, f"Error opening Calendar database: {e}"
+
+
+def _format_event(summary, start, end, all_day, description, cal_name,
+                  location, participants, name_map):
+    """Format a single calendar event into a readable string."""
+    tz_label = datetime.now().astimezone().tzname() or "local"
+
+    if all_day:
+        dt_start = datetime.fromtimestamp(start + APPLE_EPOCH)
+        line = f"[{dt_start.strftime('%a %b %d')}] [all day] {summary}"
+    else:
+        dt_start = datetime.fromtimestamp(start + APPLE_EPOCH)
+        dt_end = datetime.fromtimestamp(end + APPLE_EPOCH) if end else None
+        time_str = dt_start.strftime('%a %b %d %H:%M')
+        if dt_end:
+            time_str += f"-{dt_end.strftime('%H:%M')}"
+        line = f"[{time_str} {tz_label}] {summary}"
+
+    line += f"  ({cal_name})"
+    if location:
+        line += f"\n    Location: {location}"
+    if participants:
+        # Resolve emails to names via AddressBook + Calendar Identity table
+        names = []
+        for email, is_self in participants:
+            if is_self:
+                names.append("You")
+            else:
+                # Check name_map (phone-based), then try email directly
+                name = name_map.get(email.lower()) or email
+                names.append(name)
+        line += f"\n    Attendees: {', '.join(names)}"
+    if description:
+        # Truncate long descriptions
+        desc = description.strip()
+        if len(desc) > 150:
+            desc = desc[:150] + "..."
+        line += f"\n    Notes: {desc}"
+    return line
+
+
+def _build_email_name_map(conn):
+    """Build email → display_name map from the Calendar Identity table."""
+    email_map = {}
+    try:
+        c = conn.cursor()
+        c.execute("SELECT display_name, address FROM Identity WHERE display_name IS NOT NULL")
+        for name, address in c.fetchall():
+            if address and address.startswith("mailto:"):
+                email_map[address[7:].lower()] = name
+    except Exception:
+        pass
+    return email_map
+
+
+# ── Calendar read ───────────────────────────────────────────────────────────
+
+@permission(Permission.READ_ONLY)
+def read_calendar(start_date: str, end_date: str = "", search: str = "") -> str:
+    """Read calendar events for a date range. Args: start_date (str) - ISO 8601 date or datetime for the start of the range (e.g. "2026-04-04" or "2026-04-04T14:00:00"), end_date (str, optional) - ISO 8601 end of range (defaults to end of start_date's day), search (str, optional) - filter events by title or notes content. Returns: formatted event list grouped by day, or an error message."""
+    conn, error = _open_calendar_db()
+    if error:
+        return error
+
+    try:
+        # Parse start/end dates
+        try:
+            start_dt = datetime.fromisoformat(start_date)
+        except ValueError:
+            return f"Error: invalid start_date format '{start_date}'. Use ISO 8601 (e.g. 2026-04-04 or 2026-04-04T14:00:00)."
+
+        if end_date:
+            try:
+                end_dt = datetime.fromisoformat(end_date)
+            except ValueError:
+                return f"Error: invalid end_date format '{end_date}'. Use ISO 8601."
+        else:
+            # Default to end of start_date's day
+            end_dt = start_dt.replace(hour=23, minute=59, second=59)
+
+        # Convert to Apple epoch seconds
+        start_apple = start_dt.timestamp() - APPLE_EPOCH
+        end_apple = end_dt.timestamp() - APPLE_EPOCH
+
+        cursor = conn.cursor()
+
+        # Build query with optional search filter
+        search_filter = ""
+        params = [start_apple, end_apple]
+        if search:
+            search_filter = "AND (ci.summary LIKE ? OR ci.description LIKE ?)"
+            params.extend([f"%{search}%", f"%{search}%"])
+
+        cursor.execute(f"""
+            SELECT ci.ROWID, ci.summary, ci.start_date, ci.end_date, ci.all_day,
+                   ci.description, cal.title AS cal_name,
+                   l.title AS location, ci.has_attendees
+            FROM CalendarItem ci
+            JOIN Calendar cal ON ci.calendar_id = cal.ROWID
+            LEFT JOIN Location l ON ci.location_id = l.ROWID
+            WHERE ci.start_date >= ? AND ci.start_date < ?
+            AND ci.hidden = 0
+            AND ci.entity_type != 4
+            {search_filter}
+            ORDER BY ci.start_date, ci.all_day DESC
+        """, params)
+
+        rows = cursor.fetchall()
+        if not rows:
+            return f"No events found between {start_dt.strftime('%b %d')} and {end_dt.strftime('%b %d')}."
+
+        # Build name maps for attendee resolution
+        name_map = _build_email_name_map(conn)
+        # Also merge AddressBook contacts (phone→name, but we want email→name too)
+        ab_name_map = _build_name_map()
+
+        # Fetch participants for events that have attendees
+        event_participants: dict[int, list] = defaultdict(list)
+        event_ids_with_attendees = [row[0] for row in rows if row[8]]
+        if event_ids_with_attendees:
+            placeholders = ','.join('?' * len(event_ids_with_attendees))
+            cursor.execute(f"""
+                SELECT owner_id, email, is_self
+                FROM Participant
+                WHERE owner_id IN ({placeholders})
+            """, event_ids_with_attendees)
+            for owner_id, email, is_self in cursor.fetchall():
+                event_participants[owner_id].append((email or "", is_self))
+
+        # Group by day
+        days: dict[str, list[str]] = defaultdict(list)
+        for rowid, summary, start, end, all_day, desc, cal_name, location, has_att in rows:
+            dt = datetime.fromtimestamp(start + APPLE_EPOCH)
+            day_key = dt.strftime('%a %b %d')
+            participants = event_participants.get(rowid, [])
+            # Merge both name maps for resolution
+            merged_names = {**name_map}
+            for email, _ in participants:
+                if email and email.lower() not in merged_names:
+                    # Check AddressBook by email
+                    merged_names[email.lower()] = ab_name_map.get(email.lower(), email)
+            line = _format_event(summary, start, end, all_day, desc, cal_name,
+                                 location, participants, merged_names)
+            days[day_key].append(line)
+
+        sections = []
+        for day, events in days.items():
+            sections.append(f"--- {day} ---\n" + "\n".join(f"  {e}" for e in events))
+        return "\n\n".join(sections)
+    finally:
+        conn.close()
+
+
+# ── Calendar write ──────────────────────────────────────────────────────────
+
+@permission(Permission.REQUIRES_CONFIRMATION)
+def create_event(title: str, start_time: str, end_time: str = "",
+                 duration_minutes: int = 60, all_day: bool = False,
+                 location: str = "", calendar: str = "", notes: str = "") -> str:
+    """Create a calendar event. Args: title (str) - event title, start_time (str) - ISO 8601 datetime (e.g. "2026-04-10T12:00:00"), end_time (str, optional) - ISO 8601 datetime (overrides duration_minutes if set), duration_minutes (int, optional, default 60) - event duration, all_day (bool, optional) - true for all-day events, location (str, optional), calendar (str, optional) - calendar name (defaults to system default), notes (str, optional). Returns: confirmation with calendar name and event details, or "Error: <message>"."""
+    try:
+        start_dt = datetime.fromisoformat(start_time)
+    except ValueError:
+        return f"Error: invalid start_time format '{start_time}'. Use ISO 8601 (e.g. 2026-04-10T12:00:00)."
+
+    if end_time:
+        try:
+            end_dt = datetime.fromisoformat(end_time)
+        except ValueError:
+            return f"Error: invalid end_time format '{end_time}'. Use ISO 8601."
+    else:
+        end_dt = start_dt + timedelta(minutes=duration_minutes)
+
+    # Format dates for AppleScript
+    as_start = start_dt.strftime("%B %d, %Y %I:%M:%S %p")
+    as_end = end_dt.strftime("%B %d, %Y %I:%M:%S %p")
+
+    # Build AppleScript
+    cal_selector = f'calendar "{calendar}"' if calendar else "default calendar"
+
+    # Properties for the event
+    props = f'summary:"{title}", start date:date "{as_start}", end date:date "{as_end}"'
+    if all_day:
+        props += ', allday event:true'
+    if location:
+        props += f', location:"{location}"'
+    if notes:
+        # Pass notes via env var to avoid AppleScript escaping issues
+        props += ', description:noteText'
+
+    if notes:
+        note_setup = 'set noteText to do shell script "echo $EVENT_NOTES"'
+    else:
+        note_setup = ""
+
+    script = f'''
+{note_setup}
+tell application "Calendar"
+    tell {cal_selector}
+        make new event with properties {{{props}}}
+    end tell
+end tell
+'''
+    env = {**os.environ}
+    if notes:
+        env["EVENT_NOTES"] = notes
+
+    result = subprocess.run(
+        ["osascript", "-e", script],
+        capture_output=True, text=True, timeout=10, env=env,
+    )
+    if result.returncode != 0:
+        return f"Error: {result.stderr.strip()}"
+
+    cal_label = calendar or "default calendar"
+    tz_label = datetime.now().astimezone().tzname() or "local"
+    if all_day:
+        time_desc = start_dt.strftime('%a %b %d') + " (all day)"
+    else:
+        time_desc = f"{start_dt.strftime('%a %b %d %H:%M')}-{end_dt.strftime('%H:%M')} {tz_label}"
+    return f"Event created: \"{title}\" on {time_desc} in {cal_label}."
+
+
+# ── Calendar list ───────────────────────────────────────────────────────────
+
+@permission(Permission.READ_ONLY)
+def list_calendars() -> str:
+    """List all calendars visible in Calendar.app. Args: none. Returns: list of calendar names with their account source."""
+    conn, error = _open_calendar_db()
+    if error:
+        return error
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT cal.title, s.name AS store_name
+            FROM Calendar cal
+            LEFT JOIN Store s ON cal.store_id = s.ROWID
+            WHERE cal.title IS NOT NULL
+            ORDER BY s.name, cal.title
+        """)
+        rows = cursor.fetchall()
+        if not rows:
+            return "No calendars found."
+
+        lines = []
+        for title, store in rows:
+            if store:
+                lines.append(f"  {title} ({store})")
+            else:
+                lines.append(f"  {title}")
+        return "Calendars:\n" + "\n".join(lines)
+    finally:
+        conn.close()
+
+
 # ── Tool registry ───────────────────────────────────────────────────────────
 
 TOOLS = {
@@ -691,4 +970,7 @@ TOOLS = {
     "find_gif": find_gif,
     "read_imessages": read_imessages,
     "send_imessage": send_imessage,
+    "read_calendar": read_calendar,
+    "create_event": create_event,
+    "list_calendars": list_calendars,
 }
