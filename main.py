@@ -59,12 +59,19 @@ def _stream_response(token_iter) -> str:
 
         full = ''.join(chunks)
 
-        # Decide tool-call vs. plain text once we have enough chars
+        # Decide tool-call vs. plain text once we have enough chars.
+        # Wait for at least 6 chars so "call:" prefix is fully visible
+        # before deciding — if we check too early, "call" without the
+        # colon gets classified as plain text.
         if is_tool_call is None:
             stripped = full.lstrip()
-            if len(stripped) < 3:
+            if len(stripped) < 6:
                 continue
-            is_tool_call = stripped[0] in ('{', '`') or stripped.startswith('call:')
+            is_tool_call = (
+                stripped[0] in ('{', '`')
+                or stripped.startswith('call:')
+                or stripped.startswith('call ')
+            )
 
         if is_tool_call:
             continue
