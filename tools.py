@@ -823,6 +823,18 @@ def read_calendar(start_date: str = "", end_date: str = "", search: str = "", ca
             extra_filters += " AND cal.title LIKE ?"
             params.append(f"%{calendar_name}%")
 
+        # Query both CalendarItem (one-off events) and OccurrenceCache
+        # (recurring event instances). UNION removes duplicates where a
+        # recurring event also has a CalendarItem row for the same date.
+        oc_filters = ""
+        oc_params = [start_apple, end_apple]
+        if search:
+            oc_filters += " AND (ci.summary LIKE ? OR ci.description LIKE ?)"
+            oc_params.extend([f"%{search}%", f"%{search}%"])
+        if calendar_name:
+            oc_filters += " AND cal.title LIKE ?"
+            oc_params.append(f"%{calendar_name}%")
+
         cursor.execute(f"""
             SELECT ci.ROWID, ci.summary, ci.start_date, ci.end_date, ci.all_day,
                    ci.description, cal.title AS cal_name,
@@ -834,8 +846,23 @@ def read_calendar(start_date: str = "", end_date: str = "", search: str = "", ca
             AND ci.hidden = 0
             AND ci.entity_type != 4
             {extra_filters}
-            ORDER BY ci.start_date, ci.all_day DESC
-        """, params)
+
+            UNION
+
+            SELECT ci.ROWID, ci.summary, oc.occurrence_date AS start_date,
+                   oc.occurrence_end_date AS end_date, ci.all_day,
+                   ci.description, cal.title AS cal_name,
+                   l.title AS location, ci.has_attendees
+            FROM OccurrenceCache oc
+            JOIN CalendarItem ci ON oc.event_id = ci.ROWID
+            JOIN Calendar cal ON ci.calendar_id = cal.ROWID
+            LEFT JOIN Location l ON ci.location_id = l.ROWID
+            WHERE oc.day >= ? AND oc.day < ?
+            AND ci.hidden = 0
+            {oc_filters}
+
+            ORDER BY 5 DESC, 3
+        """, params + oc_params)
 
         rows = cursor.fetchall()
         if not rows:
