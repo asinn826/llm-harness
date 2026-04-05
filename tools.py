@@ -545,16 +545,16 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False, d
 @permission(Permission.REQUIRES_CONFIRMATION)
 def send_imessage(contact: str, message: str = "", area_code: str = "", label: str = "") -> str:
     """Send a text message to a contact by name using the macOS Messages app. To send a GIF, first call find_gif to get a URL, then pass it as the message — iMessage will auto-preview it. Args: contact (str) - full name as it appears in Contacts (e.g. "Millie Wu"), message (str) - the message text to send, area_code (str, optional) - filter to a phone number with this area code (e.g. "929"), label (str, optional) - filter by phone label such as "mobile", "home", "work", "iPhone" (case-insensitive). Returns: confirmation string or "Error: <message>" on failure."""
-    # Clean up message: models often include markdown and literal \n that render
-    # as ugly raw text in iMessage. Strip markdown formatting and collapse
-    # excessive newlines into spaces for a natural reading experience.
+    # Clean up message: strip markdown syntax that iMessage can't render,
+    # but preserve intentional line breaks for readability.
     import re as _re
     message = _re.sub(r'\*\*([^*]+)\*\*', r'\1', message)  # strip **bold**
     message = _re.sub(r'#{1,6}\s*', '', message)            # strip ### headers
-    message = _re.sub(r'^\s*[\*\-]\s+', '', message, flags=_re.MULTILINE)  # strip bullet markers
-    message = _re.sub(r'\n{2,}', ' ', message)              # collapse double newlines to space
-    message = _re.sub(r'\n', ' ', message)                  # collapse single newlines to space
-    message = _re.sub(r'  +', ' ', message).strip()         # collapse multiple spaces
+    message = _re.sub(r'^\s*[\*\-]\s+', '• ', message, flags=_re.MULTILINE)  # markdown bullets → •
+    message = _re.sub(r'\n{3,}', '\n\n', message)           # cap at double newline
+    message = _re.sub(r'---+', '', message)                 # strip horizontal rules
+    message = _re.sub(r'  +', ' ', message)                 # collapse multiple spaces
+    message = message.strip()
 
     # Step 1: resolve phone number from Contacts via AppleScript.
     # `launch` reconnects to the running instance without bringing it to the
