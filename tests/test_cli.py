@@ -174,6 +174,15 @@ class TestGetUserInputCtrlC:
                 result = cli.get_user_input()
         assert result == 'hello'
 
+    def test_stream_response_has_ctrl_o_support(self):
+        """Verify _stream_response checks for Ctrl+O during generation."""
+        import inspect
+        from main import _stream_response
+        source = inspect.getsource(_stream_response)
+        assert "b'\\x0f'" in source, "_stream_response should check for Ctrl+O (0x0F)"
+        assert "expand_last_tool_result" in source, "_stream_response should call expand_last_tool_result"
+        assert "_setcbreak" in source, "_stream_response should use _setcbreak for stdin monitoring"
+
     def test_ctrl_c_handler_is_not_keyboard_interrupt(self):
         """Verify the Ctrl+C code path does NOT raise KeyboardInterrupt.
 

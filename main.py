@@ -37,8 +37,12 @@ def _stream_response(token_iter) -> str:
     blank lines) accumulate, they're flushed above the spinner so the user
     sees meaningful progress without the jitter of token-by-token streaming.
     Tool calls (starting with {, ```, or call:) stay entirely behind the spinner.
+    Ctrl+O opens the tool-output overlay during generation.
     Returns the full response string.
     """
+    import os as _os
+    import select as _select
+    import termios as _termios
     import cli
 
     chunks: list[str] = []
@@ -46,49 +50,78 @@ def _stream_response(token_iter) -> str:
     is_tool_call = None      # None = undecided, True/False once decided
     frame = 0
 
+    # Set up stdin monitoring for Ctrl+O during generation
+    is_tty = sys.stdin.isatty()
+    fd = sys.stdin.fileno() if is_tty else -1
+    old_term = _termios.tcgetattr(fd) if is_tty else None
+
     def _spin():
         nonlocal frame
         sys.stdout.write(f"\r\033[2m{_SPINNER_FRAMES[frame % len(_SPINNER_FRAMES)]} Thinking...\033[0m\033[K")
         sys.stdout.flush()
         frame += 1
 
-    for response in token_iter:
-        token = response.text if hasattr(response, 'text') else response
-        chunks.append(token)
-        _spin()
+    def _check_ctrl_o():
+        """Non-blocking check for Ctrl+O on stdin."""
+        if not is_tty:
+            return
+        r, _, _ = _select.select([fd], [], [], 0)
+        if r:
+            ch = _os.read(fd, 1)
+            if ch == b'\x0f':
+                sys.stdout.write('\r\033[K')
+                sys.stdout.flush()
+                _termios.tcsetattr(fd, _termios.TCSADRAIN, old_term)
+                _termios.tcflush(fd, _termios.TCIFLUSH)
+                cli.expand_last_tool_result()
+                cli._setcbreak(fd)
 
-        full = ''.join(chunks)
+    try:
+        if is_tty:
+            cli._setcbreak(fd)
 
-        # Decide tool-call vs. plain text once we have enough chars.
-        # Wait for at least 6 chars so "call:" prefix is fully visible
-        # before deciding — if we check too early, "call" without the
-        # colon gets classified as plain text.
-        if is_tool_call is None:
-            stripped = full.lstrip()
-            if len(stripped) < 6:
+        for response in token_iter:
+            token = response.text if hasattr(response, 'text') else response
+            chunks.append(token)
+            _spin()
+            _check_ctrl_o()
+
+            full = ''.join(chunks)
+
+            # Decide tool-call vs. plain text once we have enough chars.
+            # Wait for at least 6 chars so "call:" prefix is fully visible
+            # before deciding — if we check too early, "call" without the
+            # colon gets classified as plain text.
+            if is_tool_call is None:
+                stripped = full.lstrip()
+                if len(stripped) < 6:
+                    continue
+                is_tool_call = (
+                    stripped[0] in ('{', '`')
+                    or stripped.startswith('call:')
+                    or stripped.startswith('call ')
+                )
+
+            if is_tool_call:
                 continue
-            is_tool_call = (
-                stripped[0] in ('{', '`')
-                or stripped.startswith('call:')
-                or stripped.startswith('call ')
-            )
 
-        if is_tool_call:
-            continue
-
-        # Check for paragraph breaks (\n\n) in the un-displayed portion.
-        # When found, flush everything up to the last break above the spinner.
-        undisplayed = full[displayed_up_to:]
-        last_break = undisplayed.rfind('\n\n')
-        if last_break > 0:
-            to_show = undisplayed[:last_break].rstrip()
-            if to_show:
-                sys.stdout.write('\r\033[K')  # clear spinner line
-                if displayed_up_to == 0:
+            # Check for paragraph breaks (\n\n) in the un-displayed portion.
+            # When found, flush everything up to the last break above the spinner.
+            undisplayed = full[displayed_up_to:]
+            last_break = undisplayed.rfind('\n\n')
+            if last_break > 0:
+                to_show = undisplayed[:last_break].rstrip()
+                if to_show:
+                    sys.stdout.write('\r\033[K')  # clear spinner line
+                    if displayed_up_to == 0:
+                        console.print()
+                    console.print(Markdown(to_show))
                     console.print()
-                console.print(Markdown(to_show))
-                console.print()
-            displayed_up_to += last_break + 2
+                displayed_up_to += last_break + 2
+
+    finally:
+        if is_tty:
+            _termios.tcsetattr(fd, _termios.TCSADRAIN, old_term)
 
     # Generation complete — clear spinner
     sys.stdout.write('\r\033[K')
