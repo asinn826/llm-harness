@@ -745,16 +745,18 @@ def _format_event(summary, start, end, all_day, description, cal_name,
     if location:
         line += f"\n    Location: {location}"
     if participants:
-        # Resolve emails to names via AddressBook + Calendar Identity table
+        # Resolve emails to names, cap at 5 to avoid 2K char attendee lists
         names = []
         for email, is_self in participants:
             if is_self:
                 names.append("You")
             else:
-                # Check name_map (phone-based), then try email directly
                 name = name_map.get(email.lower()) or email
                 names.append(name)
-        line += f"\n    Attendees: {', '.join(names)}"
+        if len(names) > 5:
+            line += f"\n    Attendees: {', '.join(names[:5])} and {len(names) - 5} others"
+        else:
+            line += f"\n    Attendees: {', '.join(names)}"
     if description:
         # Truncate long descriptions
         desc = description.strip()
@@ -762,6 +764,114 @@ def _format_event(summary, start, end, all_day, description, cal_name,
             desc = desc[:150] + "..."
         line += f"\n    Notes: {desc}"
     return line
+
+
+_HOLIDAY_CALENDAR_KEYWORDS = {'holiday', 'holidays', 'birthdays', 'us holidays'}
+
+
+def _is_holiday_calendar(cal_name: str) -> bool:
+    """Check if a calendar is a holiday/subscription calendar."""
+    lower = cal_name.lower()
+    return any(kw in lower for kw in _HOLIDAY_CALENDAR_KEYWORDS)
+
+
+def _deduplicate_events(rows) -> list:
+    """Remove cross-calendar duplicates (same title + same start time).
+
+    Keeps the row with the most detail (attendees, location, description).
+    """
+    seen: dict[tuple, list] = {}  # (summary_lower, day_date) → best row
+    for row in rows:
+        rowid, summary, start, end, all_day, desc, cal_name, location, has_att = row
+        # Group by summary + calendar date (not exact time) to catch OccurrenceCache
+        # duplicates where start times differ slightly between CalendarItem and cache
+        if all_day:
+            day = datetime.utcfromtimestamp(start + APPLE_EPOCH).date()
+        else:
+            day = datetime.fromtimestamp(start + APPLE_EPOCH).date()
+        key = (summary.strip().lower(), day, round(start / 3600) if not all_day else 0)
+        if key not in seen:
+            seen[key] = row
+        else:
+            # Keep the one with more detail
+            existing = seen[key]
+            existing_score = bool(existing[5]) + bool(existing[7]) + existing[8]
+            new_score = bool(desc) + bool(location) + has_att
+            if new_score > existing_score:
+                seen[key] = row
+    return list(seen.values())
+
+
+def _collapse_multiday_spans(days: dict[str, list[str]]) -> dict[str, list[str]]:
+    """Collapse all-day events spanning consecutive days into a single entry.
+
+    If "Ken in NYC [all day]" appears on Mon-Fri, replace with a single
+    entry on the first day: "[Mon Apr 06 - Fri Apr 10] [all day] Ken in NYC"
+    and remove from subsequent days.
+    """
+    # Track all-day event titles and which days they appear on
+    from collections import OrderedDict
+    day_keys = list(days.keys())
+    allday_runs: dict[str, list[int]] = defaultdict(list)  # title → [day_indices]
+
+    for i, day_key in enumerate(day_keys):
+        for event_line in days[day_key]:
+            if '[all day]' in event_line:
+                # Extract the title (between '] [all day] ' and '  (')
+                import re
+                m = re.search(r'\[all day\]\s+(.+?)\s+\(', event_line)
+                if m:
+                    allday_runs[m.group(1).strip()].append(i)
+
+    # Find spans of 3+ consecutive days and collapse them
+    titles_to_collapse: dict[str, tuple[int, int]] = {}
+    for title, indices in allday_runs.items():
+        if len(indices) < 3:
+            continue
+        # Check for consecutive run
+        indices.sort()
+        run_start = indices[0]
+        run_end = indices[0]
+        for j in range(1, len(indices)):
+            if indices[j] == run_end + 1:
+                run_end = indices[j]
+            else:
+                break
+        if run_end - run_start >= 2:
+            titles_to_collapse[title] = (run_start, run_end)
+
+    if not titles_to_collapse:
+        return days
+
+    # Build new days dict with collapsed spans
+    new_days: dict[str, list[str]] = defaultdict(list)
+    collapsed_titles = set()
+
+    for i, day_key in enumerate(day_keys):
+        for event_line in days[day_key]:
+            m = re.search(r'\[all day\]\s+(.+?)\s+\(', event_line)
+            title = m.group(1).strip() if m else None
+
+            if title and title in titles_to_collapse:
+                span_start, span_end = titles_to_collapse[title]
+                if i == span_start and title not in collapsed_titles:
+                    # First day of span — add collapsed entry
+                    cal_match = re.search(r'\(([^)]+)\)\s*$', event_line)
+                    cal = cal_match.group(1) if cal_match else ""
+                    start_day = day_keys[span_start]
+                    end_day = day_keys[span_end]
+                    new_line = f"[{start_day} - {end_day}] [all day] {title}  ({cal})"
+                    new_days[day_key].append(new_line)
+                    collapsed_titles.add(title)
+                elif i >= span_start and i <= span_end:
+                    continue  # skip — already collapsed
+                else:
+                    new_days[day_key].append(event_line)
+            else:
+                new_days[day_key].append(event_line)
+
+    # Remove empty days
+    return {k: v for k, v in new_days.items() if v}
 
 
 def _build_email_name_map(conn):
@@ -873,9 +983,11 @@ def read_calendar(start_date: str = "", end_date: str = "", search: str = "", ca
                 filters += f" matching '{search}'"
             return f"No events found {filters}."
 
+        # Deduplicate cross-calendar copies (same title + same start time)
+        rows = _deduplicate_events(rows)
+
         # Build name maps for attendee resolution
         name_map = _build_email_name_map(conn)
-        # Also merge AddressBook contacts (phone→name, but we want email→name too)
         ab_name_map = _build_name_map()
 
         # Fetch participants for events that have attendees
@@ -891,30 +1003,52 @@ def read_calendar(start_date: str = "", end_date: str = "", search: str = "", ca
             for owner_id, email, is_self in cursor.fetchall():
                 event_participants[owner_id].append((email or "", is_self))
 
-        # Group by day
+        # Split events into regular and holiday, group by day
         days: dict[str, list[str]] = defaultdict(list)
+        holiday_names: list[tuple[str, str]] = []  # (name, day_key)
+
         for rowid, summary, start, end, all_day, desc, cal_name, location, has_att in rows:
-            # All-day events: use UTC date (stored at midnight UTC, local
-            # conversion shifts the date back). Timed events: use local time.
             if all_day:
                 dt = datetime.utcfromtimestamp(start + APPLE_EPOCH)
             else:
                 dt = datetime.fromtimestamp(start + APPLE_EPOCH)
             day_key = dt.strftime('%a %b %d')
+
+            # Holiday calendars → collect for footnote instead of full entries
+            if _is_holiday_calendar(cal_name) and all_day:
+                holiday_names.append((summary, day_key))
+                continue
+
             participants = event_participants.get(rowid, [])
-            # Merge both name maps for resolution
             merged_names = {**name_map}
             for email, _ in participants:
                 if email and email.lower() not in merged_names:
-                    # Check AddressBook by email
                     merged_names[email.lower()] = ab_name_map.get(email.lower(), email)
             line = _format_event(summary, start, end, all_day, desc, cal_name,
                                  location, participants, merged_names)
             days[day_key].append(line)
 
+        # Collapse multi-day all-day events into spans
+        days = _collapse_multiday_spans(days)
+
+        if not days and not holiday_names:
+            return "No non-holiday events found in that range."
+
         sections = []
         for day, events in days.items():
             sections.append(f"--- {day} ---\n" + "\n".join(f"  {e}" for e in events))
+
+        # Append holiday footnote
+        if holiday_names:
+            unique_holidays = []
+            seen = set()
+            for name, day_key in holiday_names:
+                key = name.lower()
+                if key not in seen:
+                    seen.add(key)
+                    unique_holidays.append(f"{name} ({day_key})")
+            sections.append(f"Holidays: {', '.join(unique_holidays)}")
+
         return "\n\n".join(sections)
     finally:
         conn.close()
