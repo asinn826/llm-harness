@@ -8,10 +8,11 @@ Claude code at home:
 
 ```bash
 pip install -r requirements.txt
-python3.11 main.py --model google/gemma-4-E4B-it --no-mlx          # daily use — runs cool, good quality
-python3.11 main.py --model mlx-community/Qwen3.5-4B-OptiQ-4bit    # middle ground — clean tool calls
-python3.11 main.py --model mlx-community/Qwen3.5-9B-MLX-4bit      # best quality — runs hot
+python3.11 main.py                                                  # interactive model picker
+python3.11 main.py --model google/gemma-4-E4B-it --no-mlx          # skip picker, load directly
 ```
+
+Start without `--model` to get an interactive picker with recommended models and any you've already downloaded. Switch models mid-session with `/model`.
 
 | Model | Size | Engine | Heat | Tool calling | Speed |
 |---|---|---|---|---|---|
