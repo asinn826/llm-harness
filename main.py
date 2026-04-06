@@ -25,9 +25,132 @@ from cli import (
     confirm_tool, get_user_input, thinking_spinner, expand_last_tool_result,
 )
 
+import gc
+from pathlib import Path
+
 _USE_MLX = torch.backends.mps.is_available()
 
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+
+# ── Model registry ──────────────────────────────────────────────────────────
+
+RECOMMENDED_MODELS = [
+    {
+        "name": "Gemma 4 E4B",
+        "id": "google/gemma-4-E4B-it",
+        "size": "~8GB",
+        "heat": "Cool",
+        "quality": "Good quality",
+        "backend": "hf",
+    },
+    {
+        "name": "Qwen 3.5 4B 4-bit",
+        "id": "mlx-community/Qwen3.5-4B-OptiQ-4bit",
+        "size": "~3GB",
+        "heat": "Warm",
+        "quality": "Clean tools",
+        "backend": "mlx",
+    },
+    {
+        "name": "Qwen 3.5 9B 4-bit",
+        "id": "mlx-community/Qwen3.5-9B-MLX-4bit",
+        "size": "~5GB",
+        "heat": "Hot",
+        "quality": "Best quality",
+        "backend": "mlx",
+    },
+]
+
+
+def detect_backend(model_id: str) -> str:
+    """Determine whether to use mlx-lm or HF for a given model."""
+    if not _USE_MLX:
+        return "hf"
+    if model_id.startswith("mlx-community/"):
+        return "mlx"
+    _HF_ONLY = {"google/gemma-4-E4B-it"}
+    if model_id in _HF_ONLY:
+        return "hf"
+    return "mlx"
+
+
+def find_cached_models() -> list[str]:
+    """Find HF model IDs already downloaded to ~/.cache/huggingface/hub/."""
+    cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
+    models = []
+    if cache_dir.exists():
+        for d in cache_dir.iterdir():
+            if d.name.startswith("models--"):
+                model_id = d.name.replace("models--", "").replace("--", "/")
+                models.append(model_id)
+    return sorted(models)
+
+
+def show_model_picker(current: str = None) -> tuple[str, str]:
+    """Show an interactive model picker and return (model_id, backend)."""
+    recommended_ids = {m["id"] for m in RECOMMENDED_MODELS}
+    cached = [m for m in find_cached_models() if m not in recommended_ids]
+
+    if current:
+        console.print(f"\n[dim]Current model: {current}[/dim]\n")
+
+    console.print("[bold]Choose a model:[/bold]\n")
+    choices = []
+    for i, m in enumerate(RECOMMENDED_MODELS, 1):
+        marker = "  [dim]← current[/dim]" if m["id"] == current else ""
+        backend_label = "HF backend" if m["backend"] == "hf" else "mlx"
+        console.print(f"  [bold]{i}.[/bold] {m['name']:<25} {m['heat']:<8} {m['quality']:<18} ({backend_label}){marker}")
+        choices.append(m)
+
+    if cached:
+        console.print(f"\n  [dim]Locally cached:[/dim]")
+        for j, model_id in enumerate(cached, len(RECOMMENDED_MODELS) + 1):
+            backend = detect_backend(model_id)
+            backend_label = "HF backend" if backend == "hf" else "mlx"
+            marker = "  [dim]← current[/dim]" if model_id == current else ""
+            console.print(f"  [bold]{j}.[/bold] [dim]{model_id:<40}[/dim] ({backend_label}){marker}")
+            choices.append({"id": model_id, "backend": backend})
+
+    console.print(f"\n  [dim]Or enter a HuggingFace model ID[/dim]\n")
+
+    while True:
+        try:
+            raw = input("  > ").strip()
+        except (EOFError, KeyboardInterrupt):
+            raise SystemExit(0)
+        if not raw:
+            continue
+        # Number selection
+        try:
+            idx = int(raw) - 1
+            if 0 <= idx < len(choices):
+                c = choices[idx]
+                return c["id"], c.get("backend", detect_backend(c["id"]))
+        except ValueError:
+            pass
+        # Arbitrary model ID
+        if "/" in raw:
+            return raw, detect_backend(raw)
+        console.print(f"  [dim]Invalid selection. Enter a number (1-{len(choices)}) or a model ID like 'org/model-name'.[/dim]")
+
+
+def unload_model():
+    """Free model memory before loading a new one."""
+    gc.collect()
+    if torch.backends.mps.is_available():
+        torch.mps.empty_cache()
+
+
+def load_and_build(model_id: str, backend: str, system_prompt: str):
+    """Load a model and return (model_fn, model_id, backend)."""
+    if backend == "mlx":
+        tokenizer, model = load_model_mlx(model_id)
+        model_fn = make_model_fn_mlx(tokenizer, model, system_prompt)
+    else:
+        processor, model = load_model_hf(model_id)
+        model_fn = make_model_fn_hf(processor, model, system_prompt)
+    return model_fn, model_id, backend
 
 
 def _stream_response(token_iter) -> str:
@@ -433,8 +556,8 @@ def main():
     parser = argparse.ArgumentParser(description="A minimal LLM harness with tool use")
     parser.add_argument(
         "--model",
-        default="Qwen/Qwen2.5-0.5B-Instruct",
-        help="HuggingFace model ID (default: Qwen/Qwen2.5-0.5B-Instruct)",
+        default=None,
+        help="HuggingFace model ID. If omitted, shows an interactive picker.",
     )
     parser.add_argument(
         "--no-mlx",
@@ -443,20 +566,22 @@ def main():
     )
     args = parser.parse_args()
 
-    use_mlx = _USE_MLX and not args.no_mlx
-
-    backend = "MLX" if use_mlx else "HF"
-    print_banner(args.model, backend)
-
-    if use_mlx:
-        tokenizer, model = load_model_mlx(args.model)
-        model_fn_factory = make_model_fn_mlx
-    else:
-        tokenizer, model = load_model_hf(args.model)
-        model_fn_factory = make_model_fn_hf
-
     system_prompt = build_system_prompt(TOOLS)
-    model_fn = model_fn_factory(tokenizer, model, system_prompt)
+
+    if args.model:
+        # Flag given — load directly (existing behavior)
+        backend = detect_backend(args.model) if not args.no_mlx else "hf"
+        backend_label = "MLX" if backend == "mlx" else "HF"
+        print_banner(args.model, backend_label)
+        model_fn, model_id, backend = load_and_build(args.model, backend, system_prompt)
+    else:
+        # No flag — show picker
+        console.print()
+        model_id, backend = show_model_picker()
+        backend_label = "MLX" if backend == "mlx" else "HF"
+        print_banner(model_id, backend_label)
+        model_fn, model_id, backend = load_and_build(model_id, backend, system_prompt)
+
     conversation = []  # persists across turns — the model sees full history
 
     while True:
@@ -470,6 +595,17 @@ def main():
 
         if user_input.lower() == "expand":
             expand_last_tool_result()
+            continue
+
+        if user_input.lower() == "/model":
+            new_model_id, new_backend = show_model_picker(current=model_id)
+            if new_model_id != model_id:
+                console.print(f"\n[dim]Unloading {model_id}...[/dim]")
+                unload_model()
+                model_fn, model_id, backend = load_and_build(new_model_id, new_backend, system_prompt)
+                console.print(f"[dim]Conversation history preserved ({len(conversation)} messages).[/dim]\n")
+            else:
+                console.print(f"\n[dim]Already using {model_id}.[/dim]\n")
             continue
 
         response = run_conversation_turn(
