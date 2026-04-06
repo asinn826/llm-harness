@@ -13,6 +13,12 @@ python3.11 main.py --model mlx-community/Qwen3.5-4B-OptiQ-4bit    # middle groun
 python3.11 main.py --model mlx-community/Qwen3.5-9B-MLX-4bit      # best quality — runs hot
 ```
 
+| Model | Size | Engine | Heat | Tool calling | Speed |
+|---|---|---|---|---|---|
+| Gemma 4 E4B | 4B | `--no-mlx` | 🟢 Cool | Good (parser helps) | Slower |
+| Qwen 3.5 4B 4-bit | 4B | mlx-lm | 🟡 Warm | Clean | Fast |
+| Qwen 3.5 9B 4-bit | 9B | mlx-lm | 🔴 Hot | Best | Fast |
+
 ## HuggingFace token
 
 A token is optional for public models but required for gated ones (e.g. Llama). To use one, create a `.env` file in this directory:
@@ -60,14 +66,6 @@ Models marked mlx-lm use Apple's MLX framework, which compiles optimized GPU ker
 - **Use mlx-lm (the default)** for `mlx-community/` quantized models. Faster responses, but more heat.
 - **Use `--no-mlx`** for models that mlx-lm doesn't support yet (like Gemma 4), or when you want cooler operation at the cost of slower responses.
 - You **cannot** mix them: `mlx-community/` models only work with mlx-lm, and some models (Gemma 4) only work with `--no-mlx`.
-
-### Quick reference
-
-| Model | Size | Engine | Heat | Tool calling | Speed |
-|---|---|---|---|---|---|
-| Gemma 4 E4B | 4B | `--no-mlx` | 🟢 Cool | Good (parser helps) | Slower |
-| Qwen 3.5 4B 4-bit | 4B | mlx-lm | 🟡 Warm | Clean | Fast |
-| Qwen 3.5 9B 4-bit | 9B | mlx-lm | 🔴 Hot | Best | Fast |
 
 > **Note**: Full-precision (fp16) models 9B+ don't fit in 36GB memory via `--no-mlx`. Use quantized `mlx-community` models for anything above 4B.
 
