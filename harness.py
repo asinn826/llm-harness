@@ -81,7 +81,9 @@ EXAMPLES:
 - "messages from Sarah this month" → {{"tool": "read_imessages", "args": {{"contact": "Sarah", "days_back": 30}}}}
 - "send John a text saying hi" → {{"tool": "send_imessage", "args": {{"contact": "John", "message": "hi"}}}}
 - "tell Sarah she left her keys" → {{"tool": "send_imessage", "args": {{"contact": "Sarah", "message": "you left your keys here"}}}}
-- "send a gif of a dumpster fire to John" → first {{"tool": "find_gif", "args": {{"query": "dumpster fire"}}}}, then send the URL via send_imessage
+- "send a gif of a dumpster fire to John" → STEP 1: {{"tool": "find_gif", "args": {{"query": "dumpster fire"}}}} → STEP 2 (after getting URL): {{"tool": "send_imessage", "args": {{"contact": "John", "message": "<the URL from find_gif>"}}}}
+- "send Peter a funny gif" → STEP 1: {{"tool": "find_gif", "args": {{"query": "funny"}}}} → STEP 2: {{"tool": "send_imessage", "args": {{"contact": "Peter", "message": "<the URL>"}}}}
+- "summarize my calendar and text it to Sarah" → STEP 1: {{"tool": "read_calendar", "args": {{}}}} → STEP 2: {{"tool": "send_imessage", "args": {{"contact": "Sarah", "message": "<your summary>"}}}}
 - "what's on my calendar?" → {{"tool": "read_calendar", "args": {{"start_date": "{today_iso}"}}}}
 - "what's on my Work calendar this month?" → {{"tool": "read_calendar", "args": {{"start_date": "{today_iso}", "days_ahead": 30, "calendar_name": "Work"}}}}
 - "schedule lunch Thu at noon" → {{"tool": "create_event", "args": {{"title": "Lunch", "start_time": "<Thu>T12:00:00"}}}}
