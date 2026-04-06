@@ -23,26 +23,47 @@ HF_TOKEN=hf_...
 
 Get a token at huggingface.co/settings/tokens. For gated models, you also need to accept the model's terms on its HuggingFace page.
 
-## Model recommendations
+## Choosing a model
 
-Tested on Apple Silicon (36GB unified memory). Model choice is a tradeoff between tool-calling quality and laptop heat — mlx-lm is faster but pushes the GPU harder, while the HF backend (`--no-mlx`) runs cooler.
+Tested on a MacBook Pro with 36GB unified memory. Picking a model is a tradeoff between how well it follows instructions, how fast it responds, and how hot your laptop gets.
 
-On Apple Silicon, [mlx-lm](https://github.com/ml-explore/mlx-examples/tree/main/llms) is used automatically (5-10x faster than HuggingFace transformers on MPS). Pass `--no-mlx` to force the HuggingFace backend (slower but cooler).
+### Recommended models
 
-| Model | Memory | Backend | Heat | Quality | Best for |
-|---|---|---|---|---|---|
-| `google/gemma-4-E4B-it` | ~8GB | HF (`--no-mlx`) | 🟢 Low | Good reasoning, inconsistent formatting | **Daily use** — runs cool, parser handles quirks |
-| `mlx-community/Qwen3.5-4B-OptiQ-4bit` | ~3GB | mlx-lm | 🟡 Medium | Clean JSON, good for 1-2 tool chains | Quick tasks, lower heat than 9B |
-| `mlx-community/Qwen3.5-9B-MLX-4bit` | ~5GB | mlx-lm | 🔴 Hot | Best tool calling, reliable multi-step chains | **Best quality** — use for complex tasks |
+**🟢 Google Gemma 4 E4B — best for everyday use**
+- 4 billion parameters, instruction tuned by Google
+- Runs cool — your laptop stays comfortable even after many turns
+- Good at reasoning and understanding what you want
+- Occasionally formats tool calls oddly, but the harness handles it
+- Slower responses (runs on the HF backend, not the fast mlx engine)
+- `python3.11 main.py --model google/gemma-4-E4B-it --no-mlx`
 
-> **Note**: fp16 models ≥9B (e.g. `Qwen/Qwen3.5-9B`) OOM on 36GB via `--no-mlx`. Use quantized mlx-community models for anything above 4B.
+**🟡 Qwen 3.5 4B — good middle ground**
+- 4 billion parameters (quantized to 4-bit), instruction tuned by Alibaba
+- Moderate heat — warmer than Gemma, cooler than the 9B
+- Clean, reliable tool call formatting — fewer parser workarounds needed
+- Good for simple tasks (1-2 tool calls), may stall on complex multi-step chains
+- `python3.11 main.py --model mlx-community/Qwen3.5-4B-OptiQ-4bit`
 
-### Known model quirks
+**🔴 Qwen 3.5 9B — best quality, runs hot**
+- 9 billion parameters (quantized to 4-bit), instruction tuned by Alibaba
+- Best at following instructions and chaining multiple tools together
+- Handles 3-4 step chains reliably (e.g. read calendar → compose summary → send message)
+- Runs hot — your fan will kick in after sustained use
+- `python3.11 main.py --model mlx-community/Qwen3.5-9B-MLX-4bit`
 
-- **Gemma 4 E4B**: produces many `call:` format variations (`call:tool:name:`, `call:tool_name:`, missing quotes, etc.) instead of clean JSON. The harness parser handles most of them. Good reasoning but multi-step chains (3+ tools) sometimes stall. Requires `--no-mlx` and Python 3.11+.
-- **Qwen 3.5 9B 4-bit**: most reliable for tool calling — handles 3-4 step chains, clean JSON, follows message formatting rules. Runs hot on sustained use due to mlx-lm saturating the GPU.
-- **Qwen 3.5 4B 4-bit**: good middle ground. Better formatting than Gemma, less heat than 9B. May drop longer chains like Gemma.
-- **Small models (<4B)**: prone to repetition loops, ignoring system prompt rules, and dropping tool chains mid-execution.
+### Why some models run hotter
+
+Models marked mlx-lm use Apple's MLX framework, which compiles optimized GPU kernels for Apple Silicon. This makes inference 3-5x faster but pushes the chip harder — more speed means more heat. Models with `--no-mlx` use a more general-purpose engine (HuggingFace transformers) that's slower but gives the GPU more breathing room.
+
+### Quick reference
+
+| Model | Size | Heat | Tool calling | Speed |
+|---|---|---|---|---|
+| Gemma 4 E4B | 4B | 🟢 Cool | Good (parser helps) | Slower |
+| Qwen 3.5 4B 4-bit | 4B | 🟡 Warm | Clean | Fast |
+| Qwen 3.5 9B 4-bit | 9B | 🔴 Hot | Best | Fast |
+
+> **Note**: Full-precision (fp16) models 9B+ don't fit in 36GB memory via `--no-mlx`. Use quantized `mlx-community` models for anything above 4B.
 
 ### Gemma 4 setup
 
