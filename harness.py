@@ -200,6 +200,8 @@ def parse_tool_call(response: str) -> Optional[dict]:
     text = re.sub(r"```(?:json)?\s*(.*?)\s*```", r"\1", response, flags=re.DOTALL).strip()
 
     # Repair common model output errors before attempting to parse:
+    # - stray \n" between closing quote and braces: "value"\n"}} → "value"}}
+    text = re.sub(r'"\\n"(\s*\}\})', r'"\1', text)
     # - missing values like "limit": ,  →  "limit": null
     text = re.sub(r':\s*,', ': null,', text)
     # - unclosed string before } — add the missing closing quote
