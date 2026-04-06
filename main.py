@@ -406,11 +406,16 @@ def make_model_fn_hf(processor, model, system_prompt: str):
             text = "\n".join(lines) + "\nASSISTANT:"
             inputs = processor(text=text, return_tensors="pt").to(model.device)
 
+        # Filter out multimodal-only keys (mm_token_type_ids, pixel_values, etc.)
+        # that AutoProcessor adds but text-only generation doesn't accept.
+        model_input_names = set(model.forward.__code__.co_varnames[:model.forward.__code__.co_argcount])
+        gen_inputs = {k: v for k, v in inputs.items() if k in model_input_names or k in ('input_ids', 'attention_mask')}
+
         streamer = TextIteratorStreamer(processor, skip_prompt=True, skip_special_tokens=True)
 
         def _generate():
             with torch.no_grad():
-                model.generate(**inputs, max_new_tokens=2048, do_sample=False,
+                model.generate(**gen_inputs, max_new_tokens=2048, do_sample=False,
                                repetition_penalty=1.2, streamer=streamer)
 
         thread = threading.Thread(target=_generate)
