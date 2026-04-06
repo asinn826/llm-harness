@@ -406,10 +406,12 @@ def make_model_fn_hf(processor, model, system_prompt: str):
             text = "\n".join(lines) + "\nASSISTANT:"
             inputs = processor(text=text, return_tensors="pt").to(model.device)
 
-        # Filter out multimodal-only keys (mm_token_type_ids, pixel_values, etc.)
-        # that AutoProcessor adds but text-only generation doesn't accept.
-        model_input_names = set(model.forward.__code__.co_varnames[:model.forward.__code__.co_argcount])
-        gen_inputs = {k: v for k, v in inputs.items() if k in model_input_names or k in ('input_ids', 'attention_mask')}
+        # Filter out multimodal-only keys that AutoProcessor adds for
+        # vision/audio but text-only generation rejects. Blocklist approach
+        # so we don't accidentally drop keys a new model needs.
+        _MULTIMODAL_KEYS = {'mm_token_type_ids', 'pixel_values', 'image_sizes',
+                            'pixel_attention_mask', 'image_grid_thw'}
+        gen_inputs = {k: v for k, v in inputs.items() if k not in _MULTIMODAL_KEYS}
 
         streamer = TextIteratorStreamer(processor, skip_prompt=True, skip_special_tokens=True)
 
