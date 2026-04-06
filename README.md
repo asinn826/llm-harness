@@ -55,13 +55,19 @@ Tested on a MacBook Pro with 36GB unified memory. Picking a model is a tradeoff 
 
 Models marked mlx-lm use Apple's MLX framework, which compiles optimized GPU kernels for Apple Silicon. This makes inference 3-5x faster but pushes the chip harder — more speed means more heat. Models with `--no-mlx` use a more general-purpose engine (HuggingFace transformers) that's slower but gives the GPU more breathing room.
 
+### MLX vs `--no-mlx`: which should I use?
+
+- **Use mlx-lm (the default)** for `mlx-community/` quantized models. Faster responses, but more heat.
+- **Use `--no-mlx`** for models that mlx-lm doesn't support yet (like Gemma 4), or when you want cooler operation at the cost of slower responses.
+- You **cannot** mix them: `mlx-community/` models only work with mlx-lm, and some models (Gemma 4) only work with `--no-mlx`.
+
 ### Quick reference
 
-| Model | Size | Heat | Tool calling | Speed |
-|---|---|---|---|---|
-| Gemma 4 E4B | 4B | 🟢 Cool | Good (parser helps) | Slower |
-| Qwen 3.5 4B 4-bit | 4B | 🟡 Warm | Clean | Fast |
-| Qwen 3.5 9B 4-bit | 9B | 🔴 Hot | Best | Fast |
+| Model | Size | Engine | Heat | Tool calling | Speed |
+|---|---|---|---|---|---|
+| Gemma 4 E4B | 4B | `--no-mlx` | 🟢 Cool | Good (parser helps) | Slower |
+| Qwen 3.5 4B 4-bit | 4B | mlx-lm | 🟡 Warm | Clean | Fast |
+| Qwen 3.5 9B 4-bit | 9B | mlx-lm | 🔴 Hot | Best | Fast |
 
 > **Note**: Full-precision (fp16) models 9B+ don't fit in 36GB memory via `--no-mlx`. Use quantized `mlx-community` models for anything above 4B.
 
