@@ -19,6 +19,16 @@ python3.11 main.py --model mlx-community/Qwen3.5-9B-MLX-4bit      # best quality
 | Qwen 3.5 4B 4-bit | 4B | mlx-lm | 🟡 Warm | Clean | Fast |
 | Qwen 3.5 9B 4-bit | 9B | mlx-lm | 🔴 Hot | Best | Fast |
 
+### Gemma 4 setup
+
+Gemma 4 requires the HuggingFace backend (`--no-mlx`), Python 3.10+, and extra dependencies:
+
+```bash
+pip3.11 install torch accelerate torchvision pillow
+pip3.11 install git+https://github.com/huggingface/transformers.git
+python3.11 main.py --model google/gemma-4-E4B-it --no-mlx
+```
+
 ## HuggingFace token
 
 A token is optional for public models but required for gated ones (e.g. Llama). To use one, create a `.env` file in this directory:
@@ -68,16 +78,6 @@ Models marked mlx-lm use Apple's MLX framework, which compiles optimized GPU ker
 - You **cannot** mix them: `mlx-community/` models only work with mlx-lm, and some models (Gemma 4) only work with `--no-mlx`.
 
 > **Note**: Full-precision (fp16) models 9B+ don't fit in 36GB memory via `--no-mlx`. Use quantized `mlx-community` models for anything above 4B.
-
-### Gemma 4 setup
-
-Gemma 4 requires the HuggingFace backend (`--no-mlx`), Python 3.10+, and extra dependencies:
-
-```bash
-pip3.11 install torch accelerate torchvision pillow
-pip3.11 install git+https://github.com/huggingface/transformers.git
-python3.11 main.py --model google/gemma-4-E4B-it --no-mlx
-```
 
 ## Chain-of-thought
 
