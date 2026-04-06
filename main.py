@@ -325,7 +325,7 @@ def load_model_hf(model_id: str):
                         pct = self.n / self.total
                         filled = int(20 * pct)
                         bar = '█' * filled + '░' * (20 - filled)
-                        desc = self.desc or model_id
+                        desc = getattr(self, 'desc', None) or model_id
                         sys.stdout.write(f"\r\033[2m{desc}  {bar} {pct:>4.0%}\033[0m")
                         sys.stdout.flush()
 
