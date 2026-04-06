@@ -63,8 +63,8 @@ LLAMA = (
 )
 
 
-def print_banner(model_name: str, backend: str):
-    """Print the startup banner with model info and a random hint."""
+def print_banner(model_name: str = "", backend: str = ""):
+    """Print the startup banner with optional model info and a random hint."""
     import random
     hint = random.choice(HINTS)
     llama_lines = LLAMA.split("\n")
@@ -73,21 +73,15 @@ def print_banner(model_name: str, backend: str):
         "[dim]any HF model · shell · files ·[/dim]",
         "[dim]web · imessage · calendar[/dim]",
     ]
-    # Pair llama art with info text side by side
     combined = []
     for i in range(max(len(llama_lines), len(info_lines))):
         left = llama_lines[i] if i < len(llama_lines) else "          "
         right = f"   {info_lines[i]}" if i < len(info_lines) else ""
         combined.append(f"{left}{right}")
-    banner = (
-        "\n".join(combined) + "\n"
-        "\n"
-        "[dim]────────────────────────────────────────────────[/dim]\n"
-        "\n"
-        f"[dim]Model[/dim]  [white]{model_name}[/white] [dim]·[/dim] [white]{backend}[/white]\n"
-        "\n"
-        f"[dim]try: \"{hint}\"[/dim]"
-    )
+    banner = "\n".join(combined) + "\n\n[dim]────────────────────────────────────────────────[/dim]\n"
+    if model_name:
+        banner += f"\n[dim]Model[/dim]  [white]{model_name}[/white] [dim]·[/dim] [white]{backend}[/white]\n"
+    banner += f"\n[dim]try: \"{hint}\"[/dim]"
     console.print(Panel(banner, border_style="dim"))
 
 

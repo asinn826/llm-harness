@@ -569,18 +569,18 @@ def main():
     system_prompt = build_system_prompt(TOOLS)
 
     if args.model:
-        # Flag given — load directly (existing behavior)
+        # Flag given — show banner with model info and load directly
         backend = detect_backend(args.model) if not args.no_mlx else "hf"
         backend_label = "MLX" if backend == "mlx" else "HF"
         print_banner(args.model, backend_label)
         model_fn, model_id, backend = load_and_build(args.model, backend, system_prompt)
     else:
-        # No flag — show picker
-        console.print()
+        # No flag — show banner immediately, then picker
+        print_banner()
         model_id, backend = show_model_picker()
-        backend_label = "MLX" if backend == "mlx" else "HF"
-        print_banner(model_id, backend_label)
         model_fn, model_id, backend = load_and_build(model_id, backend, system_prompt)
+        backend_label = "MLX" if backend == "mlx" else "HF"
+        console.print(f"[dim]✓ Ready — {model_id} · {backend_label}[/dim]\n")
 
     conversation = []  # persists across turns — the model sees full history
 
