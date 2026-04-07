@@ -629,8 +629,8 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False, d
 # ── iMessage send ───────────────────────────────────────────────────────────
 
 @permission(Permission.REQUIRES_CONFIRMATION)
-def send_imessage(contact: str, message: str = "", area_code: str = "", label: str = "") -> str:
-    """Send a text message to a contact by name using the macOS Messages app. To send a GIF, first call find_gif to get a URL, then pass it as the message — iMessage will auto-preview it. Args: contact (str) - full name as it appears in Contacts (e.g. "Millie Wu"), message (str) - the message text to send, area_code (str, optional) - filter to a phone number with this area code (e.g. "929"), label (str, optional) - filter by phone label such as "mobile", "home", "work", "iPhone" (case-insensitive). Returns: confirmation string or "Error: <message>" on failure."""
+def send_imessage(contact: str, message: str = "", file_path: str = "", area_code: str = "", label: str = "") -> str:
+    """Send a text message or file to a contact via macOS Messages. To send a GIF, first call find_gif to get a URL, then pass it as the message. To send a file, pass the file_path. Args: contact (str) - full name as it appears in Contacts (e.g. "Millie Wu"), message (str, optional) - the message text to send, file_path (str, optional) - path to a file to send as an attachment (e.g. "~/Downloads/document.pdf"), area_code (str, optional) - filter to a phone number with this area code (e.g. "929"), label (str, optional) - filter by phone label such as "mobile", "home", "work", "iPhone" (case-insensitive). Returns: confirmation string or "Error: <message>" on failure."""
     # Clean up message: strip markdown syntax that iMessage can't render,
     # but preserve intentional line breaks for readability.
     import re as _re
@@ -641,6 +641,13 @@ def send_imessage(contact: str, message: str = "", area_code: str = "", label: s
     message = _re.sub(r'---+', '', message)                 # strip horizontal rules
     message = _re.sub(r'  +', ' ', message)                 # collapse multiple spaces
     message = message.strip()
+
+    # Validate file path if provided
+    resolved_file = ""
+    if file_path:
+        resolved_file = os.path.expanduser(file_path)
+        if not os.path.isfile(resolved_file):
+            return f"Error: file not found: {file_path}"
 
     # Step 1: resolve phone number from Contacts via AppleScript.
     # `launch` reconnects to the running instance without bringing it to the
@@ -675,7 +682,7 @@ return thePhone
     service_type = _detect_service(e164)
 
     # Step 3: send via the determined service, with fallback to the other
-    return _send_via_messages_app(e164, message, contact, service_type)
+    return _send_via_messages_app(e164, message, contact, service_type, resolved_file)
 
 
 def _build_phone_selection(contact: str, area_code: str, label: str) -> str:
@@ -747,21 +754,48 @@ def _detect_service(e164: str) -> str:
     return service_type
 
 
-def _send_via_messages_app(e164: str, message: str, contact: str, service_type: str) -> str:
-    """Send a message via Messages.app AppleScript, with service fallback."""
+def _send_via_messages_app(e164: str, message: str, contact: str, service_type: str, file_path: str = "") -> str:
+    """Send a message and/or file via Messages.app AppleScript, with service fallback."""
     if service_type == "iMessage":
         primary, fallback = "iMessage", "SMS"
     else:
         primary, fallback = "SMS", "iMessage"
 
-    # Write message to a temp file so AppleScript can read it with newlines
-    # preserved. Environment variables + do shell script mangles newlines.
     import tempfile
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
-        f.write(message)
-        msg_file = f.name
 
-    send_script = f'''
+    if file_path:
+        # Send a file attachment. If message is also provided, send both.
+        send_parts = []
+        if message:
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+                f.write(message)
+                msg_file = f.name
+            send_parts.append(f'set theMsg to read POSIX file "{msg_file}" as «class utf8»')
+            send_parts.append(f'send theMsg to theBuddy')
+
+        send_parts.append(f'send POSIX file "{file_path}" to theBuddy')
+        send_body = "\n        ".join(send_parts)
+
+        send_script = f'''
+tell application "Messages"
+    try
+        set theService to 1st service whose service type = {primary}
+        set theBuddy to buddy "{e164}" of theService
+        {send_body}
+    on error
+        set theService to 1st service whose service type = {fallback}
+        set theBuddy to buddy "{e164}" of theService
+        {send_body}
+    end try
+end tell
+'''
+    else:
+        # Text-only message
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+            f.write(message)
+            msg_file = f.name
+
+        send_script = f'''
 set theMsg to read POSIX file "{msg_file}" as «class utf8»
 tell application "Messages"
     try
@@ -773,13 +807,20 @@ tell application "Messages"
     end try
 end tell
 '''
+
     result = subprocess.run(
         ["osascript", "-e", send_script],
         capture_output=True, text=True, timeout=15,
     )
-    os.unlink(msg_file)
+    # Clean up temp files
+    if 'msg_file' in locals():
+        os.unlink(msg_file)
     if result.returncode != 0:
         return f"Error: {result.stderr.strip()}"
+
+    if file_path:
+        filename = os.path.basename(file_path)
+        return f"File '{filename}' sent to {contact} via {service_type}. Check Messages.app to confirm delivery."
     return f"Message sent to {contact} via {service_type}. Check Messages.app to confirm delivery."
 
 
