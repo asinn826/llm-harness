@@ -40,6 +40,31 @@ HF_TOKEN=hf_...
 
 Get a token at huggingface.co/settings/tokens. For gated models, you also need to accept the model's terms on its HuggingFace page.
 
+## API keys and permissions
+
+Most tools work out of the box with no setup. A few need API keys or macOS permissions:
+
+| Tool | Requirement | How to set up |
+|---|---|---|
+| Web search | `TAVILY_API_KEY` | Free tier at [tavily.com](https://tavily.com). Add `TAVILY_API_KEY=tvly-...` to `.env` |
+| Weather | None | Uses [Open-Meteo](https://open-meteo.com) (free, no key needed) |
+| GIF search | None | Uses Tenor (key is built in) |
+| iMessage read | Full Disk Access | System Settings → Privacy & Security → Full Disk Access → enable for Terminal |
+| iMessage send | None | Uses AppleScript via Messages.app (works automatically) |
+| Calendar read | Full Disk Access | Same as iMessage read — enable once, covers both |
+| Calendar write | None | Uses AppleScript via Calendar.app |
+
+### .env file
+
+Create a `.env` file in the project directory for any keys you need:
+
+```
+HF_TOKEN=hf_...              # optional — only for gated models (Llama, etc.)
+TAVILY_API_KEY=tvly-...      # optional — only for web_search tool
+```
+
+Everything else works without any configuration.
+
 ## Choosing a model
 
 Tested on a MacBook Pro with 36GB unified memory. Picking a model is a tradeoff between how well it follows instructions, how fast it responds, and how hot your laptop gets.
