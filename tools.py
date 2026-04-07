@@ -174,15 +174,8 @@ _WEATHER_CODES = {
 
 
 @permission(Permission.READ_ONLY)
-def get_weather(location: str = "") -> str:
-    """Get current weather for a city or location. Args: location (str, optional) - city name, e.g. "Seattle" or "Paris, France". If omitted, uses the system's local timezone to guess the nearest city. Returns: current conditions including temperature, wind, precipitation, and a short description."""
-    if not location:
-        # Infer from macOS system timezone (e.g. America/Los_Angeles → Los Angeles)
-        try:
-            tz_link = subprocess.run(['readlink', '/etc/localtime'], capture_output=True, text=True).stdout.strip()
-            location = tz_link.split('/')[-1].replace('_', ' ')
-        except Exception:
-            location = "New York"  # safe fallback
+def get_weather(location: str) -> str:
+    """Get current weather for a city or location. Args: location (str) - city name, e.g. "Seattle" or "Paris, France". This is required — if the user doesn't specify a city, ask them. Returns: current conditions including temperature, wind, precipitation, and a short description."""
     try:
         # Geocode the location name to lat/lon
         geo = requests.get(
