@@ -773,7 +773,7 @@ def _send_via_messages_app(e164: str, message: str, contact: str, service_type: 
             send_parts.append(f'set theMsg to read POSIX file "{msg_file}" as «class utf8»')
             send_parts.append(f'send theMsg to theBuddy')
 
-        send_parts.append(f'send POSIX file "{file_path}" to theBuddy')
+        send_parts.append(f'send (POSIX file "{file_path}" as alias) to theBuddy')
         send_body = "\n        ".join(send_parts)
 
         send_script = f'''
