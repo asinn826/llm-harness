@@ -211,8 +211,14 @@ def parse_tool_call(response: str) -> Optional[dict]:
     text = re.sub(r"```(?:json)?\s*(.*?)\s*```", r"\1", response, flags=re.DOTALL).strip()
 
     # Repair common model output errors before attempting to parse:
+    # - stray backslash before value quotes: `: \"value"` → `: "value"`
+    #   Only match when preceded by `: ` or `,` at the boundary of a JSON value,
+    #   NOT inside an already-quoted string (where \" is a valid escape).
+    text = re.sub(r'(?<=[{,])\s*"([^"]+)":\s*\\(")', r' "\1": \2', text)
     # - stray \n" between closing quote and braces: "value"\n"}} → "value"}}
     text = re.sub(r'"\\n"(\s*\}\})', r'"\1', text)
+    # - </think> tags from thinking mode leaking into output
+    text = re.sub(r'</think>\s*', '', text)
     # - missing values like "limit": ,  →  "limit": null
     text = re.sub(r':\s*,', ': null,', text)
     # - unclosed string before } — add the missing closing quote
