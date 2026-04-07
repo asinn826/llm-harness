@@ -425,7 +425,15 @@ def run_conversation_turn(
         tool_call = parse_tool_call(response)
 
         if tool_call is None:
-            # Plain text response — we're done
+            # Plain text response — we're done.
+            # Warn if the response looks like it contains a tool call that
+            # the parser couldn't extract (helps debug format issues).
+            if '"tool"' in response or 'call:' in response:
+                import logging
+                logging.warning(
+                    "Response contains tool-call-like text but parse_tool_call returned None. "
+                    "Last 200 chars: %s", response[-200:]
+                )
             conversation.append({"role": "assistant", "content": response})
             return response
 
