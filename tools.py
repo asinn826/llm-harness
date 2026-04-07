@@ -173,9 +173,29 @@ _WEATHER_CODES = {
 }
 
 
+_cached_ip_city: str = ""
+
+
+def _get_ip_city() -> str:
+    """Get the user's city from IP geolocation (cached after first call)."""
+    global _cached_ip_city
+    if _cached_ip_city:
+        return _cached_ip_city
+    try:
+        r = requests.get("https://ipinfo.io/json", timeout=5).json()
+        _cached_ip_city = r.get("city", "")
+        return _cached_ip_city
+    except Exception:
+        return ""
+
+
 @permission(Permission.READ_ONLY)
-def get_weather(location: str) -> str:
-    """Get current weather for a city or location. Args: location (str) - city name, e.g. "Seattle" or "Paris, France". This is required — if the user doesn't specify a city, ask them. Returns: current conditions including temperature, wind, precipitation, and a short description."""
+def get_weather(location: str = "") -> str:
+    """Get current weather for a city or location. Args: location (str, optional) - city name, e.g. "Seattle" or "Paris, France". If omitted, auto-detects the user's city from their IP address. Returns: current conditions including temperature, wind, precipitation, and a short description."""
+    if not location:
+        location = _get_ip_city()
+        if not location:
+            return "Error: could not detect your location. Please specify a city, e.g. get_weather(location='Seattle')."
     try:
         # Geocode the location name to lat/lon
         geo = requests.get(
