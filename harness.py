@@ -68,6 +68,7 @@ PICK THE RIGHT TOOL — don't default to calendar for everything:
 - Questions about YOUR schedule, events, availability → read_calendar
 - Questions about YOUR messages, conversations → read_imessages
 - "where is Shelton?" → web_search (it's a factual question, not a calendar query)
+- "what's the weather?" / "is it raining?" → get_weather
 - "tell Tyler about Shelton" → compose from what you know + send_imessage
 
 EXAMPLES:
@@ -75,7 +76,8 @@ EXAMPLES:
 - "what is 123 * 456?" → {{"tool": "calculator", "args": {{"expression": "123 * 456"}}}}
 - "search for X" → {{"tool": "web_search", "args": {{"query": "X"}}}}
 - "where is Shelton?" → {{"tool": "web_search", "args": {{"query": "Shelton location"}}}}
-- "what's the weather in Seattle?" → {{"tool": "web_search", "args": {{"query": "weather Seattle"}}}}
+- "what's the weather in Seattle?" → {{"tool": "get_weather", "args": {{"location": "Seattle"}}}}
+- "is it raining?" → {{"tool": "get_weather", "args": {{"location": "<user's likely city from context>"}}}}
 - "read my recent messages" → {{"tool": "read_imessages", "args": {{"contact": "", "limit": 20}}}}
 - "what did John say?" → {{"tool": "read_imessages", "args": {{"contact": "John"}}}}
 - "messages from Sarah this month" → {{"tool": "read_imessages", "args": {{"contact": "Sarah", "days_back": 30}}}}

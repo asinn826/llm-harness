@@ -161,6 +161,72 @@ def web_search(query: str) -> str:
         return f"Error: {e}"
 
 
+_WEATHER_CODES = {
+    0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
+    45: "Foggy", 48: "Depositing rime fog",
+    51: "Light drizzle", 53: "Moderate drizzle", 55: "Dense drizzle",
+    61: "Slight rain", 63: "Moderate rain", 65: "Heavy rain",
+    71: "Slight snow", 73: "Moderate snow", 75: "Heavy snow",
+    80: "Slight rain showers", 81: "Moderate rain showers", 82: "Violent rain showers",
+    85: "Slight snow showers", 86: "Heavy snow showers",
+    95: "Thunderstorm", 96: "Thunderstorm with slight hail", 99: "Thunderstorm with heavy hail",
+}
+
+
+@permission(Permission.READ_ONLY)
+def get_weather(location: str) -> str:
+    """Get current weather for a city or location. Args: location (str) - city name, e.g. "Seattle" or "Paris, France". Returns: current conditions including temperature, wind, precipitation, and a short description."""
+    try:
+        # Geocode the location name to lat/lon
+        geo = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": location, "count": 1},
+            timeout=10,
+        ).json()
+        results = geo.get("results")
+        if not results:
+            return f"Error: could not find location '{location}'"
+        loc = results[0]
+        city = loc["name"]
+        region = loc.get("admin1", "")
+        country = loc.get("country", "")
+        label = ", ".join(filter(None, [city, region, country]))
+
+        # Fetch current weather
+        weather = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": loc["latitude"],
+                "longitude": loc["longitude"],
+                "current": "temperature_2m,apparent_temperature,precipitation,weather_code,wind_speed_10m,relative_humidity_2m",
+                "temperature_unit": "fahrenheit",
+                "wind_speed_unit": "mph",
+                "precipitation_unit": "inch",
+                "timezone": "auto",
+            },
+            timeout=10,
+        ).json()
+        cur = weather["current"]
+        desc = _WEATHER_CODES.get(cur["weather_code"], "Unknown")
+        temp = cur["temperature_2m"]
+        feels = cur["apparent_temperature"]
+        wind = cur["wind_speed_10m"]
+        humidity = cur["relative_humidity_2m"]
+        precip = cur["precipitation"]
+
+        lines = [
+            f"Weather in {label}:",
+            f"  {desc}, {temp}°F (feels like {feels}°F)",
+            f"  Wind: {wind} mph",
+            f"  Humidity: {humidity}%",
+        ]
+        if precip > 0:
+            lines.append(f"  Precipitation: {precip} in")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error: {e}"
+
+
 @permission(Permission.READ_ONLY)
 def find_gif(query: str) -> str:
     """Search Tenor for a GIF matching the query and return a URL. Args: query (str). Returns: a Tenor GIF URL that can be sent as a message (iMessage will auto-preview it), or "Error: <message>" on failure."""
@@ -1166,6 +1232,7 @@ TOOLS = {
     "calculator": calculator,
     "fetch_url": fetch_url,
     "web_search": web_search,
+    "get_weather": get_weather,
     "find_gif": find_gif,
     "read_imessages": read_imessages,
     "send_imessage": send_imessage,
