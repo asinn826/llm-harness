@@ -39,7 +39,8 @@ def build_system_prompt(tools: dict) -> str:
     registry and it shows up here automatically.
     """
     from datetime import datetime as _dt
-    today_str = _dt.now().strftime("Today is %A, %B %d, %Y.")
+    now = _dt.now()
+    today_str = now.strftime("Today is %A, %B %d, %Y. The current time is %I:%M %p.")
     today_iso = _dt.now().strftime("%Y-%m-%d")
 
     schemas = get_tool_schemas(tools)
