@@ -128,34 +128,51 @@ def calculator(expression: str) -> str:
 
 @permission(Permission.READ_ONLY)
 def fetch_url(url: str) -> str:
-    """Fetch the content of a webpage and return it as plain text. Args: url (str). Returns: page content as plain text (truncated to 3000 chars), or "Error: <message>" on failure."""
+    """Fetch the content of a webpage and return it as clean plain text (main content only, nav/boilerplate stripped). Args: url (str). Returns: page content as plain text (truncated to 8000 chars), or "Error: <message>" on failure."""
     try:
         resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
-        h = html2text.HTML2Text()
-        h.ignore_links = True
-        h.ignore_images = True
-        text = h.handle(resp.text).strip()
-        return text[:3000] + "\n... (truncated)" if len(text) > 3000 else text
+        resp.raise_for_status()
+        text = None
+        try:
+            import trafilatura
+            text = trafilatura.extract(resp.text, include_comments=False,
+                                       include_tables=True, favor_recall=True)
+        except ImportError:
+            pass
+        if not text or len(text.strip()) < 50:
+            h = html2text.HTML2Text()
+            h.ignore_links = True
+            h.ignore_images = True
+            text = h.handle(resp.text).strip()
+        return text[:8000] + "\n... (truncated)" if len(text) > 8000 else text
     except Exception as e:
         return f"Error: {e}"
 
 
 @permission(Permission.READ_ONLY)
 def web_search(query: str) -> str:
-    """Search the web using Tavily and return results. Args: query (str). Returns: newline-joined results (title + content snippet per result), "No results found.", or "Error: <message>"."""
+    """Search the web using Tavily and return results. Args: query (str). Returns: numbered results with title, URL, and snippet (up to 5 results), "No results found.", or "Error: <message>". Use fetch_url on a result URL to read the full page."""
     api_key = os.environ.get("TAVILY_API_KEY")
     if not api_key:
         return "Error: TAVILY_API_KEY environment variable not set"
     try:
         resp = requests.post(
             "https://api.tavily.com/search",
-            json={"api_key": api_key, "query": query, "max_results": 3},
+            json={"api_key": api_key, "query": query, "max_results": 5},
             timeout=10,
         )
         data = resp.json()
         results = []
-        for r in data.get("results", []):
-            results.append(f"{r['title']}\n{r['content']}")
+        import re
+        for i, r in enumerate(data.get("results", []), 1):
+            content = r.get("content", "")
+            # Strip markdown links/images that Tavily sometimes returns
+            content = re.sub(r'!?\[([^\]]*)\]\([^)]*\)', r'\1', content)
+            content = re.sub(r'\s*\*\s+', ' ', content)  # bullet artifacts
+            content = ' '.join(content.split())  # collapse whitespace
+            if len(content) > 300:
+                content = content[:300] + "..."
+            results.append(f"{i}. {r['title']}\n   {r.get('url', '')}\n   {content}")
         return "\n\n".join(results) if results else "No results found."
     except Exception as e:
         return f"Error: {e}"
@@ -1243,6 +1260,33 @@ def list_calendars() -> str:
         conn.close()
 
 
+# ── Memory tools ────────────────────────────────────────────────────────────
+
+@permission(Permission.READ_ONLY)
+def remember(fact: str, category: str = "general", always_on: bool = False) -> str:
+    """Save a fact to memory for future sessions. Args: fact (str) - the fact to remember (e.g. "Alex means Alex Jiang", "dentist appointment May 5"), category (str, optional) - one of: contact, preference, fact, correction (default: general), always_on (bool, optional) - if true, this fact is included in every conversation automatically (use for important contact preferences and user info). Returns: confirmation."""
+    from memory import add_fact
+    result = add_fact(fact, category=category, always_on=always_on)
+    if result.get("use_count", 0) > 1:
+        return f"Updated existing memory: \"{fact}\""
+    return f"Remembered: \"{fact}\" (category: {category}, always-on: {always_on})"
+
+
+@permission(Permission.READ_ONLY)
+def recall(query: str) -> str:
+    """Look up a fact from memory. Use this when you need to disambiguate contacts, check user preferences, or recall something the user previously told you. Args: query (str) - what to look up (e.g. "Alex contact", "dentist appointment", "message preferences"). Returns: matching facts or "Nothing found in memory"."""
+    from memory import search_facts
+    results = search_facts(query)
+    if not results:
+        return "Nothing found in memory."
+    lines = []
+    for f in results:
+        tag = f" [{f['category']}]" if f.get('category') != 'general' else ""
+        on = " (always-on)" if f.get('always_on') else ""
+        lines.append(f"- {f['text']}{tag}{on}")
+    return "From memory:\n" + "\n".join(lines)
+
+
 # ── Tool registry ───────────────────────────────────────────────────────────
 
 TOOLS = {
@@ -1259,4 +1303,6 @@ TOOLS = {
     "read_calendar": read_calendar,
     "create_event": create_event,
     "list_calendars": list_calendars,
+    "remember": remember,
+    "recall": recall,
 }

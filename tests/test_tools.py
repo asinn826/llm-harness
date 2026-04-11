@@ -49,10 +49,10 @@ def test_fetch_url_returns_text():
 
 def test_fetch_url_truncates_long_content():
     mock_response = MagicMock()
-    mock_response.text = f"<p>{'a' * 5000}</p>"
+    mock_response.text = f"<html><body><article><p>{'a' * 10000}</p></article></body></html>"
     with patch("tools.requests.get", return_value=mock_response):
         result = fetch_url("https://example.com")
-    assert len(result) <= 3020  # 3000 + len("... (truncated)")
+    assert len(result) <= 8020  # 8000 + len("... (truncated)")
     assert "truncated" in result
 
 def test_fetch_url_handles_error():
@@ -64,14 +64,16 @@ def test_web_search_returns_results():
     mock_response = MagicMock()
     mock_response.json.return_value = {
         "results": [
-            {"title": "Paris", "content": "Paris is the capital of France."},
-            {"title": "France", "content": "France is a country in Western Europe."},
+            {"title": "Paris", "url": "https://example.com/paris", "content": "Paris is the capital of France."},
+            {"title": "France", "url": "https://example.com/france", "content": "France is a country in Western Europe."},
         ]
     }
     with patch("tools.requests.post", return_value=mock_response):
         with patch.dict("os.environ", {"TAVILY_API_KEY": "test-key"}):
             result = web_search("capital of France")
     assert "Paris" in result
+    assert "https://example.com/paris" in result
+    assert "1." in result
 
 def test_web_search_handles_error():
     with patch("tools.requests.post", side_effect=Exception("network error")):

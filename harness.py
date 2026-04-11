@@ -43,11 +43,16 @@ def build_system_prompt(tools: dict) -> str:
     today_str = now.strftime("Today is %A, %B %d, %Y. The current time is %I:%M %p.")
     today_iso = _dt.now().strftime("%Y-%m-%d")
 
+    from memory import compile_paragraph
+    memory_block = compile_paragraph()
+
     schemas = get_tool_schemas(tools)
     tool_descriptions = json.dumps(list(schemas.values()), indent=2)
+    memory_section = f"\n{memory_block}\n" if memory_block else ""
     return f"""You are a helpful assistant with access to tools.
 
 {today_str} Convert relative dates to ISO 8601 using this (e.g. "tomorrow" → "{today_iso}" + 1 day).
+{memory_section}
 
 TOOL CALL FORMAT — respond with ONLY this JSON, nothing else:
 {{"tool": "<tool_name>", "args": {{"<arg_name>": "<value>"}}}}
@@ -64,6 +69,12 @@ RULES:
 6. Copy URLs and file paths exactly as written. Never correct or modify them.
 7. For greetings and chitchat ("hello", "thanks", "ok"), respond in plain text — no tool needed.
 8. For vague/creative requests ("send a gif to someone who deserves it"), be autonomous: read messages for context, make a fun choice, and act. Don't interview the user.
+
+MEMORY — you can remember and recall facts across sessions:
+- Use `remember` to save important facts the user tells you (contacts, preferences, appointments).
+- Use `recall` when you need to disambiguate a name, check a preference, or look up something the user said before.
+- Facts marked always_on=true in the USER CONTEXT above are available every turn without calling recall.
+- When the user corrects you ("no, the other Alex"), save the correction with remember so you don't repeat the mistake.
 
 PICK THE RIGHT TOOL — don't default to calendar for everything:
 - Questions about the world, facts, places, people → web_search
@@ -92,6 +103,8 @@ EXAMPLES:
 - "what's on my Work calendar this month?" → {{"tool": "read_calendar", "args": {{"start_date": "{today_iso}", "days_ahead": 30, "calendar_name": "Work"}}}}
 - "schedule lunch Thu at noon" → {{"tool": "create_event", "args": {{"title": "Lunch", "start_time": "<Thu>T12:00:00"}}}}
 - "fetch alfredsin.com" → {{"tool": "fetch_url", "args": {{"url": "http://alfredsin.com"}}}}
+- "remember that Alex means Alex Jiang" → {{"tool": "remember", "args": {{"fact": "Alex means Alex Jiang", "category": "contact", "always_on": true}}}}
+- "when is Tyler's birthday?" → {{"tool": "recall", "args": {{"query": "Tyler birthday"}}}}
 
 SENDING MESSAGES — when composing text for send_imessage:
 - Write like a human texting a friend. Casual, warm, no markdown (iMessage doesn't render it).
