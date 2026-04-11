@@ -132,11 +132,14 @@ def fetch_url(url: str) -> str:
     try:
         resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
         resp.raise_for_status()
-        import trafilatura
-        text = trafilatura.extract(resp.text, include_comments=False,
-                                   include_tables=True, favor_recall=True)
+        text = None
+        try:
+            import trafilatura
+            text = trafilatura.extract(resp.text, include_comments=False,
+                                       include_tables=True, favor_recall=True)
+        except ImportError:
+            pass
         if not text or len(text.strip()) < 50:
-            # Fallback to html2text if trafilatura extracts nothing useful
             h = html2text.HTML2Text()
             h.ignore_links = True
             h.ignore_images = True
