@@ -1257,6 +1257,33 @@ def list_calendars() -> str:
         conn.close()
 
 
+# ── Memory tools ────────────────────────────────────────────────────────────
+
+@permission(Permission.READ_ONLY)
+def remember(fact: str, category: str = "general", always_on: bool = False) -> str:
+    """Save a fact to memory for future sessions. Args: fact (str) - the fact to remember (e.g. "Alex means Alex Jiang", "dentist appointment May 5"), category (str, optional) - one of: contact, preference, fact, correction (default: general), always_on (bool, optional) - if true, this fact is included in every conversation automatically (use for important contact preferences and user info). Returns: confirmation."""
+    from memory import add_fact
+    result = add_fact(fact, category=category, always_on=always_on)
+    if result.get("use_count", 0) > 1:
+        return f"Updated existing memory: \"{fact}\""
+    return f"Remembered: \"{fact}\" (category: {category}, always-on: {always_on})"
+
+
+@permission(Permission.READ_ONLY)
+def recall(query: str) -> str:
+    """Look up a fact from memory. Use this when you need to disambiguate contacts, check user preferences, or recall something the user previously told you. Args: query (str) - what to look up (e.g. "Alex contact", "dentist appointment", "message preferences"). Returns: matching facts or "Nothing found in memory"."""
+    from memory import search_facts
+    results = search_facts(query)
+    if not results:
+        return "Nothing found in memory."
+    lines = []
+    for f in results:
+        tag = f" [{f['category']}]" if f.get('category') != 'general' else ""
+        on = " (always-on)" if f.get('always_on') else ""
+        lines.append(f"- {f['text']}{tag}{on}")
+    return "From memory:\n" + "\n".join(lines)
+
+
 # ── Tool registry ───────────────────────────────────────────────────────────
 
 TOOLS = {
@@ -1273,4 +1300,6 @@ TOOLS = {
     "read_calendar": read_calendar,
     "create_event": create_event,
     "list_calendars": list_calendars,
+    "remember": remember,
+    "recall": recall,
 }
