@@ -677,7 +677,7 @@ def _read_group_messages(cursor, chat_identifier: str, limit: int, days_back: in
 
 @permission(Permission.READ_ONLY)
 def read_group_imessages(participants: str, limit: int = 20, days_back: int = 0) -> str:
-    """Read messages from a group chat identified by participant names. Args: participants (str) - comma-separated participant names (e.g. "Millie, Alex, Kenny"), limit (int, optional) - number of messages to return (default 20), days_back (int, optional) - only return messages from the last N days. Returns: formatted message history with per-message sender attribution."""
+    """Read messages from a group chat identified by participant names. Args: participants (str) - comma-separated participant names (e.g. "Dana, Sam, Ryan"), limit (int, optional) - number of messages to return (default 20), days_back (int, optional) - only return messages from the last N days. Returns: formatted message history with per-message sender attribution."""
     names = [n.strip() for n in participants.split(",") if n.strip()]
     if len(names) < 2:
         return "Error: need at least 2 participant names for a group chat (comma-separated)."
@@ -721,7 +721,7 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False, d
 
 @permission(Permission.REQUIRES_CONFIRMATION)
 def send_imessage(contact: str, message: str = "", area_code: str = "", label: str = "") -> str:
-    """Send a text message to a contact by name using the macOS Messages app. To send a GIF, first call find_gif to get a URL, then pass it as the message — iMessage will auto-preview it. Args: contact (str) - full name as it appears in Contacts (e.g. "Millie Wu"), message (str) - the message text to send, area_code (str, optional) - filter to a phone number with this area code (e.g. "929"), label (str, optional) - filter by phone label such as "mobile", "home", "work", "iPhone" (case-insensitive). Returns: confirmation string or "Error: <message>" on failure."""
+    """Send a text message to a contact by name using the macOS Messages app. To send a GIF, first call find_gif to get a URL, then pass it as the message — iMessage will auto-preview it. Args: contact (str) - full name as it appears in Contacts (e.g. "Dana Lee"), message (str) - the message text to send, area_code (str, optional) - filter to a phone number with this area code (e.g. "929"), label (str, optional) - filter by phone label such as "mobile", "home", "work", "iPhone" (case-insensitive). Returns: confirmation string or "Error: <message>" on failure."""
     # Clean up message: strip markdown syntax that iMessage can't render,
     # but preserve intentional line breaks for readability.
     import re as _re
@@ -972,7 +972,7 @@ def _find_group_chat(participant_names: list[str]) -> tuple[str, list[str]]:
 
 @permission(Permission.REQUIRES_CONFIRMATION)
 def send_group_imessage(participants: str, message: str) -> str:
-    """Send a message to a group chat identified by participant names. Args: participants (str) - comma-separated participant names (e.g. "Millie, Alex, Kenny"), message (str) - the message text to send. The tool finds the existing group chat that contains all named participants and sends the message there. Returns: confirmation or error."""
+    """Send a message to a group chat identified by participant names. Args: participants (str) - comma-separated participant names (e.g. "Dana, Sam, Ryan"), message (str) - the message text to send. The tool finds the existing group chat that contains all named participants and sends the message there. Returns: confirmation or error."""
     import re as _re
     # Clean up message (same as send_imessage)
     message = _re.sub(r'\*\*([^*]+)\*\*', r'\1', message)
@@ -1482,7 +1482,7 @@ def list_calendars() -> str:
 
 @permission(Permission.READ_ONLY)
 def remember(fact: str, category: str = "general", always_on: bool = False) -> str:
-    """Save a fact to memory for future sessions. Args: fact (str) - the fact to remember (e.g. "Alex means Alex Jiang", "dentist appointment May 5"), category (str, optional) - one of: contact, preference, fact, correction (default: general), always_on (bool, optional) - if true, this fact is included in every conversation automatically (use for important contact preferences and user info). Returns: confirmation."""
+    """Save a fact to memory for future sessions. Args: fact (str) - the fact to remember (e.g. "Alex means Sam Chen", "dentist appointment May 5"), category (str, optional) - one of: contact, preference, fact, correction (default: general), always_on (bool, optional) - if true, this fact is included in every conversation automatically (use for important contact preferences and user info). Returns: confirmation."""
     from memory import add_fact
     result = add_fact(fact, category=category, always_on=always_on)
     if result.get("use_count", 0) > 1:
