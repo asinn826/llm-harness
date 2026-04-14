@@ -450,7 +450,9 @@ def _decode_message_text(text, attributed_body):
     class markers.
     """
     if text:
-        return text
+        # Strip U+FFFC (object replacement char) — appears for attachment-only messages
+        cleaned = text.replace('\ufffc', '').strip()
+        return cleaned or None
     if not attributed_body:
         return None
     try:
@@ -464,7 +466,10 @@ def _decode_message_text(text, attributed_body):
             return None
         length = chunk[plus_pos + 1]
         text_start = plus_pos + 2
-        return chunk[text_start:text_start + length].decode('utf-8', errors='replace')
+        decoded = chunk[text_start:text_start + length].decode('utf-8', errors='replace')
+        # Strip U+FFFC (object replacement char) — appears for attachments
+        cleaned = decoded.replace('\ufffc', '').strip()
+        return cleaned or None
     except Exception:
         return None
 
