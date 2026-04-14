@@ -265,13 +265,46 @@ def get_weather(location: str = "") -> str:
 
 
 @permission(Permission.READ_ONLY)
-def get_forecast(location: str = "", days: int = 3) -> str:
-    """Get a multi-day weather forecast for a city or location. Args: location (str, optional) - city name, e.g. "Seattle" or "Paris, France". If omitted, auto-detects from IP. days (int, optional) - number of days to forecast, 1-7 (default: 3). Returns: daily forecast with high/low temps, precipitation chance, and conditions."""
+def get_forecast(location: str = "", days: int = 0, start_date: str = "", end_date: str = "") -> str:
+    """Get a multi-day weather forecast for a city or location. Args: location (str, optional) - city name, e.g. "Seattle" or "Paris, France". If omitted, auto-detects from IP. days (int, optional) - number of days to forecast from today, 1-16 (default: 3 if no dates given). start_date (str, optional) - ISO 8601 date to start forecast, e.g. "2026-04-15" (defaults to today). end_date (str, optional) - ISO 8601 date to end forecast, e.g. "2026-04-20". If both days and end_date are given, end_date takes precedence. Returns: daily forecast with high/low temps, precipitation chance, and conditions."""
     if not location:
         location = _get_ip_city()
         if not location:
             return "Error: could not detect your location. Please specify a city."
-    days = max(1, min(7, int(days)))
+
+    # Resolve date range
+    today = datetime.now().date()
+    if start_date:
+        try:
+            start = datetime.fromisoformat(start_date).date()
+        except ValueError:
+            return f"Error: invalid start_date '{start_date}'. Use ISO 8601 (e.g. 2026-04-15)."
+    else:
+        start = today
+
+    if end_date:
+        try:
+            end = datetime.fromisoformat(end_date).date()
+        except ValueError:
+            return f"Error: invalid end_date '{end_date}'. Use ISO 8601 (e.g. 2026-04-20)."
+        if end < start:
+            return f"Error: end_date ({end_date}) is before start_date ({start_date})."
+    elif days > 0:
+        end = start + timedelta(days=int(days) - 1)
+    else:
+        end = start + timedelta(days=2)  # default 3 days
+
+    # Open-Meteo supports up to 16 days out
+    max_end = today + timedelta(days=15)
+    if start < today:
+        start = today
+    if end > max_end:
+        end = max_end
+    if end < start:
+        end = start
+
+    num_days = (end - start).days + 1
+
     try:
         geo = requests.get(
             "https://geocoding-api.open-meteo.com/v1/search",
@@ -294,12 +327,14 @@ def get_forecast(location: str = "", days: int = 3) -> str:
                 "wind_speed_unit": "mph",
                 "precipitation_unit": "inch",
                 "timezone": "auto",
-                "forecast_days": days,
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
             },
             timeout=10,
         ).json()
         daily = weather["daily"]
-        lines = [f"Forecast for {label} ({days} day{'s' if days > 1 else ''}):", ""]
+        date_label = f"{start.isoformat()} to {end.isoformat()}" if num_days > 1 else start.isoformat()
+        lines = [f"Forecast for {label} ({date_label}, {num_days} day{'s' if num_days > 1 else ''}):", ""]
         for i in range(len(daily["time"])):
             date = daily["time"][i]
             desc = _WEATHER_CODES.get(daily["weather_code"][i], "Unknown")
