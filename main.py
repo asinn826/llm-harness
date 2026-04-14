@@ -184,20 +184,25 @@ def _stream_response(token_iter) -> str:
         sys.stdout.flush()
         frame += 1
 
-    def _check_ctrl_o():
-        """Non-blocking check for Ctrl+O on stdin."""
+    def _check_stdin():
+        """Non-blocking check for Ctrl+O (expand) and Ctrl+C (cancel) on stdin."""
+        nonlocal interrupted
         if not is_tty:
             return
         r, _, _ = _select.select([fd], [], [], 0)
         if r:
             ch = _os.read(fd, 1)
-            if ch == b'\x0f':
+            if ch == b'\x03':  # Ctrl+C — cancel generation
+                interrupted = True
+            elif ch == b'\x0f':  # Ctrl+O — expand tool output
                 sys.stdout.write('\r\033[K')
                 sys.stdout.flush()
                 _termios.tcsetattr(fd, _termios.TCSADRAIN, old_term)
                 _termios.tcflush(fd, _termios.TCIFLUSH)
                 cli.expand_last_tool_result()
                 cli._setcbreak(fd)
+
+    interrupted = False
 
     try:
         if is_tty:
@@ -207,7 +212,9 @@ def _stream_response(token_iter) -> str:
             token = response.text if hasattr(response, 'text') else response
             chunks.append(token)
             _spin()
-            _check_ctrl_o()
+            _check_stdin()
+            if interrupted:
+                break
 
             full = ''.join(chunks)
 
@@ -246,9 +253,13 @@ def _stream_response(token_iter) -> str:
         if is_tty:
             _termios.tcsetattr(fd, _termios.TCSADRAIN, old_term)
 
-    # Generation complete — clear spinner
+    # Generation complete (or interrupted) — clear spinner
     sys.stdout.write('\r\033[K')
     sys.stdout.flush()
+
+    if interrupted:
+        console.print("[dim]Cancelled.[/dim]")
+        raise KeyboardInterrupt()
 
     full = ''.join(chunks).strip()
 
@@ -543,10 +554,10 @@ def make_model_fn_hf(processor, model, system_prompt: str):
                 model.generate(**gen_inputs, max_new_tokens=2048, do_sample=False,
                                repetition_penalty=1.2, streamer=streamer)
 
-        thread = threading.Thread(target=_generate)
+        thread = threading.Thread(target=_generate, daemon=True)
         thread.start()
         response = _stream_response(streamer)
-        thread.join()
+        thread.join(timeout=1)  # don't block forever if cancelled
         return response
 
     return model_fn

@@ -454,7 +454,11 @@ def run_conversation_turn(
     conversation.append({"role": "user", "content": user_message})
 
     for _ in range(max_iterations):
-        response = model_fn(conversation)
+        try:
+            response = model_fn(conversation)
+        except KeyboardInterrupt:
+            conversation.append({"role": "assistant", "content": "(generation cancelled by user)"})
+            return "(cancelled)"
         tool_call = parse_tool_call(response)
 
         if tool_call is None:
