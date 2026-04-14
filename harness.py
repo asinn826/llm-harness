@@ -83,6 +83,7 @@ PICK THE RIGHT TOOL — don't default to calendar for everything:
 - "where is Shelton?" → web_search (it's a factual question, not a calendar query)
 - "what's the weather?" / "is it raining?" → get_weather
 - "tell Tyler about Shelton" → compose from what you know + send_imessage
+- "tell the group with Millie and Alex..." → send_group_imessage (for group chats, use participant names)
 
 EXAMPLES:
 - "what files are here?" → {{"tool": "run_shell", "args": {{"command": "ls"}}}}
@@ -96,6 +97,8 @@ EXAMPLES:
 - "messages from Sarah this month" → {{"tool": "read_imessages", "args": {{"contact": "Sarah", "days_back": 30}}}}
 - "send John a text saying hi" → {{"tool": "send_imessage", "args": {{"contact": "John", "message": "hi"}}}}
 - "tell Sarah she left her keys" → {{"tool": "send_imessage", "args": {{"contact": "Sarah", "message": "you left your keys here"}}}}
+- "tell the group chat with Millie and Alex to meet at 10am" → {{"tool": "send_group_imessage", "args": {{"participants": "Millie, Alex", "message": "meet here at 10am"}}}}
+- "respond to the group with Kenny and Millie" → {{"tool": "send_group_imessage", "args": {{"participants": "Kenny, Millie", "message": "<your response>"}}}}
 - "send a gif of a dumpster fire to John" → STEP 1: {{"tool": "find_gif", "args": {{"query": "dumpster fire"}}}} → STEP 2 (after getting URL): {{"tool": "send_imessage", "args": {{"contact": "John", "message": "<the URL from find_gif>"}}}}
 - "send Peter a funny gif" → STEP 1: {{"tool": "find_gif", "args": {{"query": "funny"}}}} → STEP 2: {{"tool": "send_imessage", "args": {{"contact": "Peter", "message": "<the URL>"}}}}
 - "summarize my calendar and text it to Sarah" → STEP 1: {{"tool": "read_calendar", "args": {{}}}} → STEP 2: {{"tool": "send_imessage", "args": {{"contact": "Sarah", "message": "<your summary>"}}}}
