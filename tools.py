@@ -624,6 +624,80 @@ end tell
     return '\n'.join(lines)
 
 
+# ── iMessage read: group chat ────────────────────────────────────────────────
+
+def _read_group_messages(cursor, chat_identifier: str, limit: int, days_back: int, participant_names: list[str]) -> str:
+    """Read messages from a specific group chat by its chat_identifier."""
+    # Find the chat rowid
+    cursor.execute("SELECT rowid FROM chat WHERE chat_identifier = ?", [chat_identifier])
+    row = cursor.fetchone()
+    if not row:
+        return f"No group chat found with identifier {chat_identifier}."
+    chat_rowid = row[0]
+
+    date_sql, date_params = _date_filter_sql(days_back)
+    cursor.execute(f"""
+        SELECT m.text, m.attributedBody, m.is_from_me, m.date,
+               h.id AS sender_handle,
+               m.cache_has_attachments, m.associated_message_type,
+               m.associated_message_guid
+        FROM message m
+        JOIN chat_message_join cmj ON m.rowid = cmj.message_id
+        LEFT JOIN handle h ON m.handle_id = h.rowid
+        WHERE cmj.chat_id = ? {date_sql}
+        GROUP BY m.rowid
+        ORDER BY m.date DESC LIMIT ?
+    """, [chat_rowid] + date_params + [limit])
+
+    rows = cursor.fetchall()
+    if not rows:
+        return f"No messages found in group chat with {', '.join(participant_names)}."
+
+    name_map = _build_name_map()
+    source_cache: dict = {}
+    lines = []
+    for text, attr_body, is_from_me, date, sender_handle, has_atts, reaction_type, assoc_guid in reversed(rows):
+        body = _decode_message_text(text, attr_body)
+        if not body:
+            body = "[image]" if has_atts else None
+        if not body:
+            continue
+
+        body = _format_reaction(body, reaction_type, assoc_guid, cursor, name_map, source_cache)
+        dt = _format_timestamp(date)
+        sender = _resolve_sender(is_from_me, sender_handle, name_map)
+        lines.append(f"[{dt}] {sender}: {body}")
+
+    if not lines:
+        return f"No readable messages in group chat with {', '.join(participant_names)}."
+
+    header = f"Group chat ({', '.join(participant_names)}):"
+    return header + "\n" + "\n".join(lines)
+
+
+@permission(Permission.READ_ONLY)
+def read_group_imessages(participants: str, limit: int = 20, days_back: int = 0) -> str:
+    """Read messages from a group chat identified by participant names. Args: participants (str) - comma-separated participant names (e.g. "Millie, Alex, Kenny"), limit (int, optional) - number of messages to return (default 20), days_back (int, optional) - only return messages from the last N days. Returns: formatted message history with per-message sender attribution."""
+    names = [n.strip() for n in participants.split(",") if n.strip()]
+    if len(names) < 2:
+        return "Error: need at least 2 participant names for a group chat (comma-separated)."
+
+    chat_id, resolved_names = _find_group_chat(names)
+    if not chat_id:
+        return f"Error: no group chat found containing {', '.join(names)}."
+
+    conn, error = _open_messages_db()
+    if error:
+        return error
+    if days_back > 0:
+        limit = max(limit, 500)
+    try:
+        cursor = conn.cursor()
+        return _read_group_messages(cursor, chat_id, limit, days_back, resolved_names)
+    finally:
+        conn.close()
+
+
 # ── iMessage read: entry point ──────────────────────────────────────────────
 
 @permission(Permission.READ_ONLY)
@@ -1445,6 +1519,7 @@ TOOLS = {
     "read_imessages": read_imessages,
     "send_imessage": send_imessage,
     "send_group_imessage": send_group_imessage,
+    "read_group_imessages": read_group_imessages,
     "read_calendar": read_calendar,
     "create_event": create_event,
     "list_calendars": list_calendars,

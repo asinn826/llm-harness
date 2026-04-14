@@ -99,6 +99,8 @@ EXAMPLES:
 - "tell Sarah she left her keys" → {{"tool": "send_imessage", "args": {{"contact": "Sarah", "message": "you left your keys here"}}}}
 - "tell the group chat with Millie and Alex to meet at 10am" → {{"tool": "send_group_imessage", "args": {{"participants": "Millie, Alex", "message": "meet here at 10am"}}}}
 - "respond to the group with Kenny and Millie" → {{"tool": "send_group_imessage", "args": {{"participants": "Kenny, Millie", "message": "<your response>"}}}}
+- "read the group chat with Millie and Alex" → {{"tool": "read_group_imessages", "args": {{"participants": "Millie, Alex"}}}}
+- "what's been happening in the Millie/Kenny/Alex chat?" → {{"tool": "read_group_imessages", "args": {{"participants": "Millie, Kenny, Alex"}}}}
 - "send a gif of a dumpster fire to John" → STEP 1: {{"tool": "find_gif", "args": {{"query": "dumpster fire"}}}} → STEP 2 (after getting URL): {{"tool": "send_imessage", "args": {{"contact": "John", "message": "<the URL from find_gif>"}}}}
 - "send Peter a funny gif" → STEP 1: {{"tool": "find_gif", "args": {{"query": "funny"}}}} → STEP 2: {{"tool": "send_imessage", "args": {{"contact": "Peter", "message": "<the URL>"}}}}
 - "summarize my calendar and text it to Sarah" → STEP 1: {{"tool": "read_calendar", "args": {{}}}} → STEP 2: {{"tool": "send_imessage", "args": {{"contact": "Sarah", "message": "<your summary>"}}}}
