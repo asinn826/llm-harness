@@ -157,6 +157,71 @@ def test_get_forecast_unknown_location():
         result = get_forecast("Xyzzyville")
     assert "Error" in result
 
+def test_get_forecast_no_location_ip_fallback_fails():
+    from tools import get_forecast
+    with patch("tools._get_ip_city", return_value=""):
+        result = get_forecast("")
+    assert "Error" in result
+    assert "location" in result.lower()
+
+def test_get_forecast_api_error():
+    from tools import get_forecast
+    with patch("tools.requests.get", side_effect=Exception("timeout")):
+        result = get_forecast("Seattle")
+    assert "Error" in result
+    assert "timeout" in result
+
+def test_get_forecast_single_day_label():
+    mock_geo = MagicMock()
+    mock_geo.json.return_value = {
+        "results": [{"name": "Portland", "admin1": "Oregon", "country": "United States",
+                      "latitude": 45.5, "longitude": -122.7}]
+    }
+    mock_weather = MagicMock()
+    mock_weather.json.return_value = {
+        "daily": {
+            "time": ["2026-04-13"],
+            "weather_code": [2],
+            "temperature_2m_max": [58.0],
+            "temperature_2m_min": [43.0],
+            "precipitation_sum": [0.0],
+            "precipitation_probability_max": [5],
+            "wind_speed_10m_max": [7.0],
+        }
+    }
+    from tools import get_forecast
+    with patch("tools.requests.get", side_effect=[mock_geo, mock_weather]):
+        result = get_forecast("Portland", days=1)
+    assert "1 day)" in result
+    assert "days)" not in result
+
+def test_get_forecast_ambiguous_location_shows_resolved():
+    """Ambiguous names like 'Long Beach' resolve to most populous match;
+    the output label should show the full resolved name so the user can verify."""
+    mock_geo = MagicMock()
+    mock_geo.json.return_value = {
+        "results": [{"name": "Long Beach", "admin1": "California", "country": "United States",
+                      "latitude": 33.77, "longitude": -118.19}]
+    }
+    mock_weather = MagicMock()
+    mock_weather.json.return_value = {
+        "daily": {
+            "time": ["2026-04-13"],
+            "weather_code": [1],
+            "temperature_2m_max": [72.0],
+            "temperature_2m_min": [58.0],
+            "precipitation_sum": [0.0],
+            "precipitation_probability_max": [0],
+            "wind_speed_10m_max": [10.0],
+        }
+    }
+    from tools import get_forecast
+    with patch("tools.requests.get", side_effect=[mock_geo, mock_weather]):
+        result = get_forecast("Long Beach", days=1)
+    assert "Long Beach" in result
+    assert "California" in result
+    assert "United States" in result
+
 
 # ── Calendar tool tests ─────────────────────────────────────────────────────
 
