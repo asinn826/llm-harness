@@ -94,6 +94,185 @@ def test_tools_registry_has_all_tools():
         assert fn.__doc__, f"{name} has no docstring — the harness needs this for the system prompt"
 
 
+# ── Forecast tool tests ────────────────────────────────────────────────────
+
+def test_get_forecast_registered():
+    assert "get_forecast" in TOOLS
+
+def _mock_geo(name="Seattle", admin1="Washington", country="United States", lat=47.6, lon=-122.3):
+    m = MagicMock()
+    m.json.return_value = {
+        "results": [{"name": name, "admin1": admin1, "country": country,
+                      "latitude": lat, "longitude": lon}]
+    }
+    return m
+
+def _mock_daily(times, codes, highs, lows, precip_sums, precip_chances, winds):
+    m = MagicMock()
+    m.json.return_value = {
+        "daily": {
+            "time": times, "weather_code": codes,
+            "temperature_2m_max": highs, "temperature_2m_min": lows,
+            "precipitation_sum": precip_sums,
+            "precipitation_probability_max": precip_chances,
+            "wind_speed_10m_max": winds,
+        }
+    }
+    return m
+
+def test_get_forecast_returns_daily_data():
+    from tools import get_forecast
+    geo = _mock_geo()
+    weather = _mock_daily(
+        ["2026-04-13", "2026-04-14", "2026-04-15"],
+        [3, 61, 0], [55.0, 50.0, 60.0], [42.0, 40.0, 45.0],
+        [0.0, 0.5, 0.0], [10, 80, 0], [8.0, 15.0, 5.0],
+    )
+    with patch("tools.requests.get", side_effect=[geo, weather]):
+        result = get_forecast("Seattle", days=3)
+    assert "Seattle" in result
+    assert "2026-04-13" in result
+    assert "2026-04-14" in result
+    assert "Overcast" in result
+    assert "Slight rain" in result
+
+def test_get_forecast_unknown_location():
+    mock_geo = MagicMock()
+    mock_geo.json.return_value = {"results": None}
+    from tools import get_forecast
+    with patch("tools.requests.get", return_value=mock_geo):
+        result = get_forecast("Xyzzyville")
+    assert "Error" in result
+
+def test_get_forecast_no_location_ip_fallback_fails():
+    from tools import get_forecast
+    with patch("tools._get_ip_city", return_value=""):
+        result = get_forecast("")
+    assert "Error" in result
+    assert "location" in result.lower()
+
+def test_get_forecast_api_error():
+    from tools import get_forecast
+    with patch("tools.requests.get", side_effect=Exception("timeout")):
+        result = get_forecast("Seattle")
+    assert "Error" in result
+    assert "timeout" in result
+
+def test_get_forecast_single_day_label():
+    from tools import get_forecast
+    geo = _mock_geo("Portland", "Oregon", "United States", 45.5, -122.7)
+    weather = _mock_daily(["2026-04-13"], [2], [58.0], [43.0], [0.0], [5], [7.0])
+    with patch("tools.requests.get", side_effect=[geo, weather]):
+        result = get_forecast("Portland", days=1)
+    assert "1 day)" in result
+    assert "days)" not in result
+
+def test_get_forecast_ambiguous_location_shows_resolved():
+    """Ambiguous names like 'Long Beach' resolve to most populous match;
+    the output label should show the full resolved name so the user can verify."""
+    from tools import get_forecast
+    geo = _mock_geo("Long Beach", "California", "United States", 33.77, -118.19)
+    weather = _mock_daily(["2026-04-13"], [1], [72.0], [58.0], [0.0], [0], [10.0])
+    with patch("tools.requests.get", side_effect=[geo, weather]):
+        result = get_forecast("Long Beach", days=1)
+    assert "Long Beach" in result
+    assert "California" in result
+    assert "United States" in result
+
+def test_get_forecast_start_and_end_date():
+    """Explicit start_date and end_date should define the range."""
+    from tools import get_forecast
+    from datetime import date, timedelta
+    # Use dates starting from today so they don't get clamped
+    today = date.today()
+    start = today
+    end = today + timedelta(days=4)
+    geo = _mock_geo()
+    times = [(start + timedelta(days=i)).isoformat() for i in range(5)]
+    weather = _mock_daily(times, [0]*5, [60.0]*5, [45.0]*5, [0.0]*5, [0]*5, [5.0]*5)
+    with patch("tools.requests.get", side_effect=[geo, weather]):
+        result = get_forecast("Seattle", start_date=start.isoformat(), end_date=end.isoformat())
+    assert start.isoformat() in result
+    assert end.isoformat() in result
+    assert "5 days)" in result
+
+def test_get_forecast_start_date_only_defaults_3_days():
+    """start_date without end_date or days should give 3 days from start."""
+    from tools import get_forecast
+    from datetime import date, timedelta
+    today = date.today()
+    geo = _mock_geo()
+    times = [(today + timedelta(days=i)).isoformat() for i in range(3)]
+    weather = _mock_daily(times, [0]*3, [60.0]*3, [45.0]*3, [0.0]*3, [0]*3, [5.0]*3)
+    with patch("tools.requests.get", side_effect=[geo, weather]):
+        result = get_forecast("Seattle", start_date=today.isoformat())
+    assert "3 days)" in result
+
+def test_get_forecast_end_date_overrides_days():
+    """end_date should take precedence over days."""
+    from tools import get_forecast
+    from datetime import date, timedelta
+    today = date.today()
+    end = today + timedelta(days=6)
+    geo = _mock_geo()
+    times = [(today + timedelta(days=i)).isoformat() for i in range(7)]
+    weather = _mock_daily(times, [0]*7, [60.0]*7, [45.0]*7, [0.0]*7, [0]*7, [5.0]*7)
+    with patch("tools.requests.get", side_effect=[geo, weather]):
+        result = get_forecast("Seattle", days=2, end_date=end.isoformat())
+    assert "7 days)" in result  # end_date wins, not days=2
+
+def test_get_forecast_invalid_start_date():
+    from tools import get_forecast
+    result = get_forecast("Seattle", start_date="not-a-date")
+    assert "Error" in result
+    assert "start_date" in result
+
+def test_get_forecast_invalid_end_date():
+    from tools import get_forecast
+    result = get_forecast("Seattle", end_date="garbage")
+    assert "Error" in result
+    assert "end_date" in result
+
+def test_get_forecast_end_before_start():
+    from tools import get_forecast
+    from datetime import date, timedelta
+    today = date.today()
+    result = get_forecast("Seattle",
+                          start_date=(today + timedelta(days=3)).isoformat(),
+                          end_date=today.isoformat())
+    assert "Error" in result
+    assert "before" in result
+
+def test_get_forecast_clamps_past_start_to_today():
+    """start_date in the past should be clamped to today."""
+    from tools import get_forecast
+    from datetime import date, timedelta
+    today = date.today()
+    geo = _mock_geo()
+    times = [(today + timedelta(days=i)).isoformat() for i in range(3)]
+    weather = _mock_daily(times, [0]*3, [60.0]*3, [45.0]*3, [0.0]*3, [0]*3, [5.0]*3)
+    with patch("tools.requests.get", side_effect=[geo, weather]):
+        result = get_forecast("Seattle", start_date="2020-01-01",
+                              end_date=(today + timedelta(days=2)).isoformat())
+    assert today.isoformat() in result
+
+def test_get_forecast_clamps_far_future_to_16_days():
+    """end_date beyond 16 days should be clamped to the API max."""
+    from tools import get_forecast
+    from datetime import date, timedelta
+    today = date.today()
+    max_end = today + timedelta(days=15)
+    geo = _mock_geo()
+    num = (max_end - today).days + 1
+    times = [(today + timedelta(days=i)).isoformat() for i in range(num)]
+    weather = _mock_daily(times, [0]*num, [60.0]*num, [45.0]*num, [0.0]*num, [0]*num, [5.0]*num)
+    with patch("tools.requests.get", side_effect=[geo, weather]):
+        result = get_forecast("Seattle", start_date=today.isoformat(),
+                              end_date=(today + timedelta(days=30)).isoformat())
+    assert max_end.isoformat() in result
+    assert f"{num} days)" in result
+
+
 # ── Calendar tool tests ─────────────────────────────────────────────────────
 
 def test_calendar_tools_registered():
