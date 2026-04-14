@@ -326,3 +326,51 @@ def test_system_prompt_contains_today():
     today = datetime.now()
     assert today.strftime("%B") in prompt  # month name
     assert today.strftime("%Y") in prompt  # year
+
+
+# ── Group chat tool tests ───────────────────────────────────────────────────
+
+def test_group_chat_tools_registered():
+    assert "send_group_imessage" in TOOLS
+    assert "read_group_imessages" in TOOLS
+
+
+def test_group_chat_tools_have_docstrings():
+    assert TOOLS["send_group_imessage"].__doc__
+    assert TOOLS["read_group_imessages"].__doc__
+
+
+def test_send_group_requires_confirmation():
+    from tools import Permission
+    assert TOOLS["send_group_imessage"].permission == Permission.REQUIRES_CONFIRMATION
+
+
+def test_read_group_is_read_only():
+    from tools import Permission
+    assert TOOLS["read_group_imessages"].permission == Permission.READ_ONLY
+
+
+def test_send_group_imessage_needs_two_participants():
+    from tools import send_group_imessage
+    result = send_group_imessage("JustOnePerson", "hello")
+    assert "Error" in result
+    assert "at least 2" in result
+
+
+def test_read_group_imessages_needs_two_participants():
+    from tools import read_group_imessages
+    result = read_group_imessages("JustOnePerson")
+    assert "Error" in result
+    assert "at least 2" in result
+
+
+def test_send_group_imessage_nonexistent_group():
+    from tools import send_group_imessage
+    result = send_group_imessage("Nonexistent Person One, Nonexistent Person Two", "hello")
+    assert "Error" in result or "no group chat" in result.lower()
+
+
+def test_read_group_imessages_nonexistent_group():
+    from tools import read_group_imessages
+    result = read_group_imessages("Nonexistent Person One, Nonexistent Person Two")
+    assert "Error" in result or "no group chat" in result.lower()

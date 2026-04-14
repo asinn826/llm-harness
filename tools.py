@@ -719,6 +719,80 @@ end tell
     return '\n'.join(lines)
 
 
+# ── iMessage read: group chat ────────────────────────────────────────────────
+
+def _read_group_messages(cursor, chat_identifier: str, limit: int, days_back: int, participant_names: list[str]) -> str:
+    """Read messages from a specific group chat by its chat_identifier."""
+    # Find the chat rowid
+    cursor.execute("SELECT rowid FROM chat WHERE chat_identifier = ?", [chat_identifier])
+    row = cursor.fetchone()
+    if not row:
+        return f"No group chat found with identifier {chat_identifier}."
+    chat_rowid = row[0]
+
+    date_sql, date_params = _date_filter_sql(days_back)
+    cursor.execute(f"""
+        SELECT m.text, m.attributedBody, m.is_from_me, m.date,
+               h.id AS sender_handle,
+               m.cache_has_attachments, m.associated_message_type,
+               m.associated_message_guid
+        FROM message m
+        JOIN chat_message_join cmj ON m.rowid = cmj.message_id
+        LEFT JOIN handle h ON m.handle_id = h.rowid
+        WHERE cmj.chat_id = ? {date_sql}
+        GROUP BY m.rowid
+        ORDER BY m.date DESC LIMIT ?
+    """, [chat_rowid] + date_params + [limit])
+
+    rows = cursor.fetchall()
+    if not rows:
+        return f"No messages found in group chat with {', '.join(participant_names)}."
+
+    name_map = _build_name_map()
+    source_cache: dict = {}
+    lines = []
+    for text, attr_body, is_from_me, date, sender_handle, has_atts, reaction_type, assoc_guid in reversed(rows):
+        body = _decode_message_text(text, attr_body)
+        if not body:
+            body = "[image]" if has_atts else None
+        if not body:
+            continue
+
+        body = _format_reaction(body, reaction_type, assoc_guid, cursor, name_map, source_cache)
+        dt = _format_timestamp(date)
+        sender = _resolve_sender(is_from_me, sender_handle, name_map)
+        lines.append(f"[{dt}] {sender}: {body}")
+
+    if not lines:
+        return f"No readable messages in group chat with {', '.join(participant_names)}."
+
+    header = f"Group chat ({', '.join(participant_names)}):"
+    return header + "\n" + "\n".join(lines)
+
+
+@permission(Permission.READ_ONLY)
+def read_group_imessages(participants: str, limit: int = 20, days_back: int = 0) -> str:
+    """Read messages from a group chat identified by participant names. Args: participants (str) - comma-separated participant names (e.g. "Dana, Sam, Ryan"), limit (int, optional) - number of messages to return (default 20), days_back (int, optional) - only return messages from the last N days. Returns: formatted message history with per-message sender attribution."""
+    names = [n.strip() for n in participants.split(",") if n.strip()]
+    if len(names) < 2:
+        return "Error: need at least 2 participant names for a group chat (comma-separated)."
+
+    chat_id, resolved_names = _find_group_chat(names)
+    if not chat_id:
+        return f"Error: no group chat found containing {', '.join(names)}."
+
+    conn, error = _open_messages_db()
+    if error:
+        return error
+    if days_back > 0:
+        limit = max(limit, 500)
+    try:
+        cursor = conn.cursor()
+        return _read_group_messages(cursor, chat_id, limit, days_back, resolved_names)
+    finally:
+        conn.close()
+
+
 # ── iMessage read: entry point ──────────────────────────────────────────────
 
 @permission(Permission.READ_ONLY)
@@ -742,7 +816,7 @@ def read_imessages(contact: str, limit: int = 10, received_only: bool = False, d
 
 @permission(Permission.REQUIRES_CONFIRMATION)
 def send_imessage(contact: str, message: str = "", area_code: str = "", label: str = "") -> str:
-    """Send a text message to a contact by name using the macOS Messages app. To send a GIF, first call find_gif to get a URL, then pass it as the message — iMessage will auto-preview it. Args: contact (str) - full name as it appears in Contacts (e.g. "Millie Wu"), message (str) - the message text to send, area_code (str, optional) - filter to a phone number with this area code (e.g. "929"), label (str, optional) - filter by phone label such as "mobile", "home", "work", "iPhone" (case-insensitive). Returns: confirmation string or "Error: <message>" on failure."""
+    """Send a text message to a contact by name using the macOS Messages app. To send a GIF, first call find_gif to get a URL, then pass it as the message — iMessage will auto-preview it. Args: contact (str) - full name as it appears in Contacts (e.g. "Dana Lee"), message (str) - the message text to send, area_code (str, optional) - filter to a phone number with this area code (e.g. "929"), label (str, optional) - filter by phone label such as "mobile", "home", "work", "iPhone" (case-insensitive). Returns: confirmation string or "Error: <message>" on failure."""
     # Clean up message: strip markdown syntax that iMessage can't render,
     # but preserve intentional line breaks for readability.
     import re as _re
@@ -893,6 +967,150 @@ end tell
     if result.returncode != 0:
         return f"Error: {result.stderr.strip()}"
     return f"Message sent to {contact} via {service_type}. Check Messages.app to confirm delivery."
+
+
+# ── iMessage group send ─────────────────────────────────────────────────────
+
+def _resolve_contact_phone(contact_name: str) -> str:
+    """Resolve a contact name to a phone number via Contacts.app. Returns E.164 or empty string."""
+    script = f'''
+tell application "Contacts" to launch
+delay 0.5
+tell application "Contacts"
+    set matchingPeople to (every person whose name contains "{contact_name}")
+    if (count of matchingPeople) is 0 then return ""
+    set thePerson to item 1 of matchingPeople
+    if (count of phones of thePerson) is 0 then return ""
+    return value of item 1 of phones of thePerson
+end tell
+'''
+    result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True, timeout=10)
+    if result.returncode != 0 or not result.stdout.strip():
+        return ""
+    raw = result.stdout.strip()
+    digits = ''.join(c for c in raw if c.isdigit())
+    if len(digits) == 10:
+        digits = '1' + digits
+    return '+' + digits if digits else ""
+
+
+def _find_group_chat(participant_names: list[str]) -> tuple[str, list[str]]:
+    """Find a group chat by matching participant names to phone numbers.
+
+    Returns (chat_identifier, resolved_names) or ("", []) if not found.
+    Looks up each name in Contacts, resolves to phone digits, then finds
+    a chat in chat_handle_join whose participant set matches.
+    """
+    # Resolve each name to ALL possible phone digits (not just the first match)
+    name_map = _build_name_map()
+    candidate_digits: list[set[str]] = []  # per participant: set of possible digits
+    resolved_names = []
+
+    for name in participant_names:
+        matches = set()
+        match_name = name
+        for digits, ab_name in name_map.items():
+            if name.lower() in ab_name.lower():
+                matches.add(digits)
+                match_name = ab_name
+        if not matches:
+            # Fall back to Contacts.app AppleScript
+            phone = _resolve_contact_phone(name)
+            if phone:
+                matches.add(_last10(phone))
+        if not matches:
+            return "", []
+        candidate_digits.append(matches)
+        resolved_names.append(match_name)
+
+    # Find a group chat where at least one candidate digit per participant
+    # appears in the chat's handle set.
+    conn, error = _open_messages_db()
+    if error:
+        return "", []
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT c.chat_identifier, h.id
+            FROM chat c
+            JOIN chat_handle_join chj ON c.rowid = chj.chat_id
+            JOIN handle h ON chj.handle_id = h.rowid
+        """)
+
+        chat_handles: dict[str, set[str]] = defaultdict(set)
+        for chat_id, handle in cursor.fetchall():
+            chat_handles[chat_id].add(_last10(handle))
+
+        # Find chat where EVERY participant has at least one matching digit
+        # Prefer smallest matching chat (most specific group)
+        best_match = None
+        best_size = float('inf')
+        for chat_id, handles in chat_handles.items():
+            if len(handles) <= 1:
+                continue
+            # Check: for each participant, is any of their candidate digits in the chat?
+            all_matched = all(
+                candidates & handles
+                for candidates in candidate_digits
+            )
+            if all_matched and len(handles) < best_size:
+                best_match = chat_id
+                best_size = len(handles)
+
+        if best_match:
+            return best_match, resolved_names
+        return "", []
+    finally:
+        conn.close()
+
+
+@permission(Permission.REQUIRES_CONFIRMATION)
+def send_group_imessage(participants: str, message: str) -> str:
+    """Send a message to a group chat identified by participant names. Args: participants (str) - comma-separated participant names (e.g. "Dana, Sam, Ryan"), message (str) - the message text to send. The tool finds the existing group chat that contains all named participants and sends the message there. Returns: confirmation or error."""
+    import re as _re
+    # Clean up message (same as send_imessage)
+    message = _re.sub(r'\*\*([^*]+)\*\*', r'\1', message)
+    message = _re.sub(r'#{1,6}\s*', '', message)
+    message = _re.sub(r'^\s*[\*\-]\s+', '• ', message, flags=_re.MULTILINE)
+    message = _re.sub(r'\n{3,}', '\n\n', message)
+    message = _re.sub(r'---+', '', message)
+    message = _re.sub(r'  +', ' ', message)
+    message = message.strip()
+
+    # Parse participant names
+    names = [n.strip() for n in participants.split(",") if n.strip()]
+    if len(names) < 2:
+        return "Error: need at least 2 participant names for a group chat (comma-separated)."
+
+    # Find the group chat
+    chat_id, resolved_names = _find_group_chat(names)
+    if not chat_id:
+        return f"Error: no group chat found containing {', '.join(names)}."
+
+    # Send via AppleScript using the chat ID
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        f.write(message)
+        msg_file = f.name
+
+    send_script = f'''
+set theMsg to read POSIX file "{msg_file}" as «class utf8»
+tell application "Messages"
+    set theChat to chat id "any;+;{chat_id}"
+    send theMsg to theChat
+end tell
+'''
+    result = subprocess.run(
+        ["osascript", "-e", send_script],
+        capture_output=True, text=True, timeout=15,
+    )
+    os.unlink(msg_file)
+    if result.returncode != 0:
+        return f"Error: {result.stderr.strip()}"
+
+    group_label = ", ".join(resolved_names)
+    return f"Message sent to group chat ({group_label}). Check Messages.app to confirm delivery."
 
 
 # ── Calendar helpers ─────────────────────────────────────────────────────────
@@ -1359,7 +1577,7 @@ def list_calendars() -> str:
 
 @permission(Permission.READ_ONLY)
 def remember(fact: str, category: str = "general", always_on: bool = False) -> str:
-    """Save a fact to memory for future sessions. Args: fact (str) - the fact to remember (e.g. "Alex means Alex Jiang", "dentist appointment May 5"), category (str, optional) - one of: contact, preference, fact, correction (default: general), always_on (bool, optional) - if true, this fact is included in every conversation automatically (use for important contact preferences and user info). Returns: confirmation."""
+    """Save a fact to memory for future sessions. Args: fact (str) - the fact to remember (e.g. "Alex means Sam Chen", "dentist appointment May 5"), category (str, optional) - one of: contact, preference, fact, correction (default: general), always_on (bool, optional) - if true, this fact is included in every conversation automatically (use for important contact preferences and user info). Returns: confirmation."""
     from memory import add_fact
     result = add_fact(fact, category=category, always_on=always_on)
     if result.get("use_count", 0) > 1:
@@ -1396,6 +1614,8 @@ TOOLS = {
     "find_gif": find_gif,
     "read_imessages": read_imessages,
     "send_imessage": send_imessage,
+    "send_group_imessage": send_group_imessage,
+    "read_group_imessages": read_group_imessages,
     "read_calendar": read_calendar,
     "create_event": create_event,
     "list_calendars": list_calendars,

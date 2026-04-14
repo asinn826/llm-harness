@@ -239,18 +239,18 @@ def test_parse_tool_call_gemma_with_nested_args():
 
 def test_parse_tool_call_flat_call_without_args_wrapper():
     """call:"tool", "key": "val"} — model omits the "args" wrapper."""
-    response = 'call:"read_imessages", "contact": "Tyler"}'
+    response = 'call:"read_imessages", "contact": "Jake"}'
     result = parse_tool_call(response)
     assert result is not None
     assert result["tool"] == "read_imessages"
-    assert result["args"] == {"contact": "Tyler"}
+    assert result["args"] == {"contact": "Jake"}
 
 
 def test_parse_tool_call_flat_call_multiple_args():
-    response = 'call:"read_imessages", "contact": "Tyler", "limit": 5}'
+    response = 'call:"read_imessages", "contact": "Jake", "limit": 5}'
     result = parse_tool_call(response)
     assert result is not None
-    assert result["args"]["contact"] == "Tyler"
+    assert result["args"]["contact"] == "Jake"
     assert result["args"]["limit"] == 5
 
 

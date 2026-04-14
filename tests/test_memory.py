@@ -25,20 +25,20 @@ def clean_memory(tmp_path):
 
 class TestAddFact:
     def test_adds_new_fact(self):
-        fact = add_fact("Alex means Alex Jiang", category="contact")
-        assert fact["text"] == "Alex means Alex Jiang"
+        fact = add_fact("Sam means Sam Chen", category="contact")
+        assert fact["text"] == "Sam means Sam Chen"
         assert fact["category"] == "contact"
         assert fact["use_count"] == 1
 
     def test_deduplicates_same_text(self):
-        add_fact("Alex means Alex Jiang")
-        result = add_fact("Alex means Alex Jiang")
+        add_fact("Sam means Sam Chen")
+        result = add_fact("Sam means Sam Chen")
         assert result["use_count"] == 2
         assert len(load_facts()) == 1
 
     def test_case_insensitive_dedup(self):
-        add_fact("alex means Alex Jiang")
-        result = add_fact("Alex Means Alex Jiang")
+        add_fact("sam means Sam Chen")
+        result = add_fact("Sam means Sam Chen")
         assert result["use_count"] == 2
         assert len(load_facts()) == 1
 
@@ -53,18 +53,18 @@ class TestAddFact:
 
 class TestSearchFacts:
     def test_finds_matching_fact(self):
-        add_fact("Alex means Alex Jiang", category="contact")
-        results = search_facts("Alex")
+        add_fact("Sam means Sam Chen", category="contact")
+        results = search_facts("Sam")
         assert len(results) == 1
-        assert "Alex Jiang" in results[0]["text"]
+        assert "Sam Chen" in results[0]["text"]
 
     def test_case_insensitive_search(self):
-        add_fact("Tyler Pollak's birthday is in March")
-        results = search_facts("tyler")
+        add_fact("Jake Davis's birthday is in March")
+        results = search_facts("jake")
         assert len(results) == 1
 
     def test_no_results(self):
-        add_fact("Alex means Alex Jiang")
+        add_fact("Sam means Sam Chen")
         results = search_facts("banana")
         assert len(results) == 0
 
@@ -74,8 +74,8 @@ class TestSearchFacts:
         assert len(results) == 1
 
     def test_updates_use_count(self):
-        add_fact("Alex means Alex Jiang")
-        search_facts("Alex")
+        add_fact("Sam means Sam Chen")
+        search_facts("Sam")
         facts = load_facts()
         assert facts[0]["use_count"] == 2  # 1 from add + 1 from search
 
@@ -127,7 +127,7 @@ class TestRemoveFact:
 class TestToolIntegration:
     def test_remember_tool(self):
         from tools import remember
-        result = remember("Tyler's birthday is March 15", category="fact")
+        result = remember("Jake's birthday is March 15", category="fact")
         assert "Remembered" in result
         facts = load_facts()
         assert len(facts) == 1
@@ -135,8 +135,8 @@ class TestToolIntegration:
     def test_recall_tool(self):
         # Call search_facts directly since the tool wrapper has
         # the same logic — avoids pytest module caching issues
-        add_fact("Tyler's birthday is March 15")
-        results = search_facts("Tyler birthday")
+        add_fact("Jake's birthday is March 15")
+        results = search_facts("Jake birthday")
         assert len(results) > 0
         assert "March 15" in results[0]["text"]
 
@@ -146,9 +146,9 @@ class TestToolIntegration:
 
     def test_remember_always_on(self):
         from tools import remember
-        remember("Alex means Alex Jiang", category="contact", always_on=True)
+        remember("Sam means Sam Chen", category="contact", always_on=True)
         paragraph = compile_paragraph()
-        assert "Alex Jiang" in paragraph
+        assert "Sam Chen" in paragraph
 
     def test_system_prompt_includes_memory(self):
         from harness import build_system_prompt
