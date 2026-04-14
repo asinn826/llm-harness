@@ -265,6 +265,66 @@ def get_weather(location: str = "") -> str:
 
 
 @permission(Permission.READ_ONLY)
+def get_forecast(location: str = "", days: int = 3) -> str:
+    """Get a multi-day weather forecast for a city or location. Args: location (str, optional) - city name, e.g. "Seattle" or "Paris, France". If omitted, auto-detects from IP. days (int, optional) - number of days to forecast, 1-7 (default: 3). Returns: daily forecast with high/low temps, precipitation chance, and conditions."""
+    if not location:
+        location = _get_ip_city()
+        if not location:
+            return "Error: could not detect your location. Please specify a city."
+    days = max(1, min(7, int(days)))
+    try:
+        geo = requests.get(
+            "https://geocoding-api.open-meteo.com/v1/search",
+            params={"name": location, "count": 1},
+            timeout=10,
+        ).json()
+        results = geo.get("results")
+        if not results:
+            return f"Error: could not find location '{location}'"
+        loc = results[0]
+        label = ", ".join(filter(None, [loc["name"], loc.get("admin1", ""), loc.get("country", "")]))
+
+        weather = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": loc["latitude"],
+                "longitude": loc["longitude"],
+                "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,wind_speed_10m_max",
+                "temperature_unit": "fahrenheit",
+                "wind_speed_unit": "mph",
+                "precipitation_unit": "inch",
+                "timezone": "auto",
+                "forecast_days": days,
+            },
+            timeout=10,
+        ).json()
+        daily = weather["daily"]
+        lines = [f"Forecast for {label} ({days} day{'s' if days > 1 else ''}):", ""]
+        for i in range(len(daily["time"])):
+            date = daily["time"][i]
+            desc = _WEATHER_CODES.get(daily["weather_code"][i], "Unknown")
+            hi = daily["temperature_2m_max"][i]
+            lo = daily["temperature_2m_min"][i]
+            precip_chance = daily["precipitation_probability_max"][i]
+            precip_amt = daily["precipitation_sum"][i]
+            wind = daily["wind_speed_10m_max"][i]
+            day_line = f"  {date}: {desc}, {lo}°F – {hi}°F"
+            extras = []
+            if precip_chance and precip_chance > 0:
+                extras.append(f"{precip_chance}% chance of precip")
+            if precip_amt and precip_amt > 0:
+                extras.append(f"{precip_amt} in expected")
+            if wind:
+                extras.append(f"wind up to {wind} mph")
+            if extras:
+                day_line += f" ({', '.join(extras)})"
+            lines.append(day_line)
+        return "\n".join(lines)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+@permission(Permission.READ_ONLY)
 def find_gif(query: str) -> str:
     """Search Tenor for a GIF matching the query and return a URL. Args: query (str). Returns: a Tenor GIF URL that can be sent as a message (iMessage will auto-preview it), or "Error: <message>" on failure."""
     try:
@@ -1297,6 +1357,7 @@ TOOLS = {
     "fetch_url": fetch_url,
     "web_search": web_search,
     "get_weather": get_weather,
+    "get_forecast": get_forecast,
     "find_gif": find_gif,
     "read_imessages": read_imessages,
     "send_imessage": send_imessage,

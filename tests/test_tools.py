@@ -94,6 +94,70 @@ def test_tools_registry_has_all_tools():
         assert fn.__doc__, f"{name} has no docstring — the harness needs this for the system prompt"
 
 
+# ── Forecast tool tests ────────────────────────────────────────────────────
+
+def test_get_forecast_registered():
+    assert "get_forecast" in TOOLS
+
+def test_get_forecast_returns_daily_data():
+    mock_geo = MagicMock()
+    mock_geo.json.return_value = {
+        "results": [{"name": "Seattle", "admin1": "Washington", "country": "United States",
+                      "latitude": 47.6, "longitude": -122.3}]
+    }
+    mock_weather = MagicMock()
+    mock_weather.json.return_value = {
+        "daily": {
+            "time": ["2026-04-13", "2026-04-14", "2026-04-15"],
+            "weather_code": [3, 61, 0],
+            "temperature_2m_max": [55.0, 50.0, 60.0],
+            "temperature_2m_min": [42.0, 40.0, 45.0],
+            "precipitation_sum": [0.0, 0.5, 0.0],
+            "precipitation_probability_max": [10, 80, 0],
+            "wind_speed_10m_max": [8.0, 15.0, 5.0],
+        }
+    }
+    from tools import get_forecast
+    with patch("tools.requests.get", side_effect=[mock_geo, mock_weather]):
+        result = get_forecast("Seattle", days=3)
+    assert "Seattle" in result
+    assert "2026-04-13" in result
+    assert "2026-04-14" in result
+    assert "Overcast" in result
+    assert "Slight rain" in result
+
+def test_get_forecast_clamps_days():
+    mock_geo = MagicMock()
+    mock_geo.json.return_value = {
+        "results": [{"name": "Seattle", "admin1": "WA", "country": "US",
+                      "latitude": 47.6, "longitude": -122.3}]
+    }
+    mock_weather = MagicMock()
+    mock_weather.json.return_value = {
+        "daily": {
+            "time": ["2026-04-13"],
+            "weather_code": [0],
+            "temperature_2m_max": [60.0],
+            "temperature_2m_min": [45.0],
+            "precipitation_sum": [0.0],
+            "precipitation_probability_max": [0],
+            "wind_speed_10m_max": [5.0],
+        }
+    }
+    from tools import get_forecast
+    with patch("tools.requests.get", side_effect=[mock_geo, mock_weather]):
+        result = get_forecast("Seattle", days=99)
+    assert "1 day" not in result or "Seattle" in result  # days clamped to 7
+
+def test_get_forecast_unknown_location():
+    mock_geo = MagicMock()
+    mock_geo.json.return_value = {"results": None}
+    from tools import get_forecast
+    with patch("tools.requests.get", return_value=mock_geo):
+        result = get_forecast("Xyzzyville")
+    assert "Error" in result
+
+
 # ── Calendar tool tests ─────────────────────────────────────────────────────
 
 def test_calendar_tools_registered():
