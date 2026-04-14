@@ -366,7 +366,8 @@ def parse_tool_call(response: str) -> Optional[dict]:
 def confirm_and_run(tool_call: dict, tools: dict, confirm_fn=None, result_fn=None, display_fn=None) -> str:
     """Ask user to confirm, then run the tool. Returns the result as a string.
 
-    confirm_fn: callable(tool_name: str, args: dict) -> bool
+    confirm_fn: callable(tool_name: str, args: dict) -> bool | str
+      Returns True (approved), False (denied), or a string (feedback for the model).
       If None, falls back to a plain input() prompt (useful outside a rich CLI).
       The CLI passes cli.confirm_tool here; tests pass a lambda.
 
@@ -406,6 +407,10 @@ def confirm_and_run(tool_call: dict, tools: dict, confirm_fn=None, result_fn=Non
         elif confirm_fn is None:
             print(f"[Tool call] {tool_name}({args})")
         approved = True
+
+    # String feedback: don't run the tool, pass the feedback to the model
+    if isinstance(approved, str):
+        return f"User feedback (do NOT run the tool — adjust and try again): {approved}"
 
     if not approved:
         return "Tool call denied by user."

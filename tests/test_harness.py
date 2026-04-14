@@ -155,6 +155,31 @@ def test_run_conversation_turn_denied_tool():
     assert "denied" in tool_result["content"].lower()
 
 
+def test_run_conversation_turn_feedback():
+    """User provides feedback instead of approving — model sees it and retries."""
+    conversation = []
+    call_count = [0]
+    def model_fn(conv):
+        call_count[0] += 1
+        if call_count[0] == 1:
+            return '{"tool": "send_imessage", "args": {"contact": "John", "message": "she left her keys"}}'
+        elif call_count[0] == 2:
+            return '{"tool": "send_imessage", "args": {"contact": "John", "message": "you left your keys"}}'
+        return "Done!"
+
+    feedback_given = [False]
+    def confirm_fn(tool_name, args):
+        if not feedback_given[0]:
+            feedback_given[0] = True
+            return "change 'she' to 'you' — rewrite from the recipient's perspective"
+        return True
+
+    result = run_conversation_turn("tell John she left her keys", conversation, model_fn, TOOLS, confirm_fn=confirm_fn)
+    # The feedback should appear in the conversation as a tool result
+    tool_results = [m for m in conversation if m["role"] == "tool"]
+    assert any("feedback" in r["content"].lower() for r in tool_results)
+
+
 def test_run_conversation_turn_max_iterations():
     """Harness stops after max_iterations even if model keeps calling tools."""
     conversation = []

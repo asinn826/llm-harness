@@ -238,16 +238,26 @@ def expand_last_tool_result():
         sys.stdout.flush()
 
 
-def confirm_tool(tool_name: str, args: dict) -> bool:
-    """Ask the user whether to run a tool. Returns True if approved.
+def confirm_tool(tool_name: str, args: dict):
+    """Ask the user whether to run a tool.
+
+    Returns:
+      True  — approved, run the tool
+      False — denied, skip the tool
+      str   — feedback: don't run, pass this text back to the model
 
     This is passed as confirm_fn to run_conversation_turn — it's the bridge
     between the harness (which knows about tools) and the CLI (which knows
     about presentation).
     """
     print_tool_call(tool_name, args)
-    response = console.input("  [dim]Run this? \\[Y/n] [/dim]").strip().lower()
-    return response in ("", "y")
+    response = console.input("  [dim]Run this? \\[Y/n/edit] [/dim]").strip()
+    if response.lower() in ("", "y"):
+        return True
+    if response.lower() == "n":
+        return False
+    # Anything else is feedback — pass it back to the model
+    return response
 
 
 # ── Raw input with native Ctrl+O support ────────────────────────────────────
