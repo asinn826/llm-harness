@@ -1006,22 +1006,23 @@ def _find_group_chat(participant_names: list[str]) -> tuple[str, list[str]]:
     candidate_digits: list[set[str]] = []  # per participant: set of possible digits
     resolved_names = []
 
+    # Also build a reverse map: digits → name for resolving after match
+    digits_to_name: dict[str, str] = {}
     for name in participant_names:
         matches = set()
-        match_name = name
         for digits, ab_name in name_map.items():
             if name.lower() in ab_name.lower():
                 matches.add(digits)
-                match_name = ab_name
+                digits_to_name[digits] = ab_name
         if not matches:
-            # Fall back to Contacts.app AppleScript
             phone = _resolve_contact_phone(name)
             if phone:
-                matches.add(_last10(phone))
+                d = _last10(phone)
+                matches.add(d)
+                digits_to_name[d] = name
         if not matches:
             return "", []
         candidate_digits.append(matches)
-        resolved_names.append(match_name)
 
     # Find a group chat where at least one candidate digit per participant
     # appears in the chat's handle set.
@@ -1059,6 +1060,20 @@ def _find_group_chat(participant_names: list[str]) -> tuple[str, list[str]]:
                 best_size = len(handles)
 
         if best_match:
+            # Resolve display names from the actual group handles —
+            # picks the contact who's IN the group, not just the first
+            # name match from the AddressBook (fixes "Alex" resolving
+            # to the wrong Alex).
+            group_handles = chat_handles[best_match]
+            resolved_names = []
+            for candidates in candidate_digits:
+                matched_digit = next((d for d in candidates if d in group_handles), None)
+                if matched_digit and matched_digit in digits_to_name:
+                    resolved_names.append(digits_to_name[matched_digit])
+                elif matched_digit and matched_digit in name_map:
+                    resolved_names.append(name_map[matched_digit])
+                else:
+                    resolved_names.append("Unknown")
             return best_match, resolved_names
         return "", []
     finally:
