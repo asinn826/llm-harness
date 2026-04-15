@@ -7,7 +7,7 @@ Claude code at home:
 ## Run
 
 ```bash
-pip install -r requirements.txt
+pip3.11 install -r requirements.txt
 python3.11 main.py                                                  # interactive model picker
 python3.11 main.py --model google/gemma-4-E4B-it --no-mlx          # skip picker, load directly
 ```
