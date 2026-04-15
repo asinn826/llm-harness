@@ -1,7 +1,7 @@
-transformers>=4.45
 torch>=2.2
 accelerate>=0.26
 mlx-lm>=0.30; sys_platform == "darwin"
+transformers>=5.0; sys_platform != "darwin"
 requests>=2.31
 html2text>=2020.1
 python-dotenv>=1.0
