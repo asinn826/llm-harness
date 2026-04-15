@@ -379,3 +379,90 @@ def test_run_conversation_turn_mutates_conversation():
     run_conversation_turn("hi", conversation, model_fn, TOOLS)
     assert conversation[0] == {"role": "user", "content": "hi"}
     assert conversation[1] == {"role": "assistant", "content": "Hello!"}
+
+
+# ── Tool result trimming ────────────────────────────────────────────────────
+
+def test_trim_stale_tool_results_trims_old():
+    """Tool results older than 2 user turns get trimmed."""
+    from harness import _trim_stale_tool_results
+    conversation = [
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": '{"tool": "read_calendar", "args": {}}'},
+        {"role": "tool", "content": "--- Mon Apr 07 ---\n" + "[Mon Apr 07 10:00] Meeting\n" * 30},
+        {"role": "assistant", "content": "You have meetings."},
+        {"role": "user", "content": "turn 2"},
+        {"role": "assistant", "content": '{"tool": "calculator", "args": {"expression": "1+1"}}'},
+        {"role": "tool", "content": "2"},
+        {"role": "assistant", "content": "The answer is 2."},
+        {"role": "user", "content": "turn 3"},
+    ]
+    _trim_stale_tool_results(conversation)
+    # The calendar result (turn 1) should be trimmed
+    assert conversation[2]["content"].startswith("[trimmed read_calendar:")
+    assert "Meeting" in conversation[2]["content"]
+    # The calculator result (turn 2, short) should NOT be trimmed
+    assert conversation[6]["content"] == "2"
+
+
+def test_trim_keeps_recent_tool_results():
+    """Tool results from the last 2 user turns are kept intact."""
+    from harness import _trim_stale_tool_results
+    big_result = "x" * 500
+    conversation = [
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": '{"tool": "web_search", "args": {}}'},
+        {"role": "tool", "content": big_result},
+        {"role": "assistant", "content": "Here are the results."},
+        {"role": "user", "content": "turn 2"},
+    ]
+    _trim_stale_tool_results(conversation)
+    # Only 1 user turn old — should NOT be trimmed (need 2+)
+    assert conversation[2]["content"] == big_result
+
+
+def test_trim_skips_short_results():
+    """Tool results under 200 chars are never trimmed."""
+    from harness import _trim_stale_tool_results
+    conversation = [
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": '{"tool": "send_imessage", "args": {}}'},
+        {"role": "tool", "content": "Message sent to John via iMessage."},
+        {"role": "assistant", "content": "Done!"},
+        {"role": "user", "content": "turn 2"},
+        {"role": "user", "content": "turn 3"},
+        {"role": "user", "content": "turn 4"},
+    ]
+    _trim_stale_tool_results(conversation)
+    assert conversation[2]["content"] == "Message sent to John via iMessage."
+
+
+def test_trim_extracts_imessage_senders():
+    """Trimmed imessage results include sender names."""
+    from harness import _trim_stale_tool_results
+    conversation = [
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": '{"tool": "read_imessages", "args": {}}'},
+        {"role": "tool", "content": "--- Chat ---\n" + "[Apr 10 14:00] Jake: hello\n[Apr 10 14:01] You: hi\n" * 20},
+        {"role": "assistant", "content": "Jake said hello."},
+        {"role": "user", "content": "turn 2"},
+        {"role": "user", "content": "turn 3"},
+    ]
+    _trim_stale_tool_results(conversation)
+    assert "trimmed read_imessages" in conversation[2]["content"]
+    assert "Jake" in conversation[2]["content"]
+
+
+def test_trim_idempotent():
+    """Trimming already-trimmed results doesn't re-trim."""
+    from harness import _trim_stale_tool_results
+    conversation = [
+        {"role": "user", "content": "turn 1"},
+        {"role": "assistant", "content": '{"tool": "read_calendar", "args": {}}'},
+        {"role": "tool", "content": "[trimmed read_calendar: 5 events — Meeting, Lunch]"},
+        {"role": "assistant", "content": "Summary."},
+        {"role": "user", "content": "turn 2"},
+        {"role": "user", "content": "turn 3"},
+    ]
+    _trim_stale_tool_results(conversation)
+    assert conversation[2]["content"] == "[trimmed read_calendar: 5 events — Meeting, Lunch]"

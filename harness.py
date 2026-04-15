@@ -426,6 +426,87 @@ def confirm_and_run(tool_call: dict, tools: dict, confirm_fn=None, result_fn=Non
     return result
 
 
+def _summarize_tool_result(content: str, tool_name: str) -> str:
+    """Generate a compact summary of a tool result without using the model."""
+    lines = content.strip().split('\n')
+
+    if tool_name == 'read_calendar':
+        events = [l.strip() for l in lines if l.strip().startswith('[')]
+        titles = []
+        for e in events:
+            parts = e.split('] ', 1)
+            if len(parts) > 1:
+                title = parts[1].split('  (')[0].strip()
+                if title and title not in ('[all day]', ''):
+                    # Strip [all day] prefix if present
+                    title = title.replace('[all day] ', '')
+                    if title:
+                        titles.append(title)
+        unique_titles = list(dict.fromkeys(titles))  # dedupe preserving order
+        return f"[trimmed {tool_name}: {len(events)} events — {', '.join(unique_titles[:5])}]"
+
+    if tool_name in ('read_imessages', 'read_group_imessages'):
+        msg_count = sum(1 for l in lines if l.strip().startswith('['))
+        senders = set()
+        for l in lines:
+            if '] ' in l and ': ' in l:
+                sender = l.split('] ', 1)[1].split(': ', 1)[0].strip()
+                if sender:
+                    senders.add(sender)
+        return f"[trimmed {tool_name}: {msg_count} messages — {', '.join(list(senders)[:4])}]"
+
+    if tool_name == 'get_weather':
+        summary = ' '.join(l.strip() for l in lines[:2] if l.strip())
+        return f"[trimmed {tool_name}: {summary}]"
+
+    if tool_name == 'web_search':
+        titles = [l.strip() for l in lines if l.strip() and not l.strip().startswith('http')][:3]
+        return f"[trimmed {tool_name}: {', '.join(titles[:2])}]"
+
+    # Default
+    first = next((l.strip() for l in lines if l.strip()), '')[:60]
+    return f"[trimmed tool result: {len(content)} chars — {first}]"
+
+
+def _trim_stale_tool_results(conversation: list, keep_recent: int = 2):
+    """Replace old tool results with compact summaries.
+
+    Keeps the last `keep_recent` user turns' tool results intact.
+    Older tool results > 200 chars are replaced with a smart summary
+    that preserves the tool name and key content (event titles, sender
+    names, etc.) without using the model.
+    """
+    # Count user messages from the end to find the cutoff
+    user_count = 0
+    cutoff_idx = len(conversation)
+    for i in range(len(conversation) - 1, -1, -1):
+        if conversation[i]["role"] == "user":
+            user_count += 1
+            if user_count >= keep_recent:
+                cutoff_idx = i
+                break
+
+    # Replace tool results before the cutoff
+    for i in range(cutoff_idx):
+        msg = conversation[i]
+        if msg["role"] != "tool" or len(msg["content"]) <= 200:
+            continue
+        # Already trimmed on a previous iteration
+        if msg["content"].startswith("[trimmed "):
+            continue
+        # Extract tool name from the preceding assistant message
+        tool_name = "unknown"
+        if i > 0 and conversation[i - 1]["role"] == "assistant":
+            try:
+                call = json.loads(conversation[i - 1]["content"])
+                tool_name = call.get("tool", "unknown")
+            except (json.JSONDecodeError, ValueError):
+                m = re.search(r'"?tool"?\s*[:=]\s*"?(\w+)', conversation[i - 1]["content"])
+                if m:
+                    tool_name = m.group(1)
+        msg["content"] = _summarize_tool_result(msg["content"], tool_name)
+
+
 def run_conversation_turn(
     user_message: str,
     conversation: list,
@@ -454,6 +535,7 @@ def run_conversation_turn(
     conversation.append({"role": "user", "content": user_message})
 
     for _ in range(max_iterations):
+        _trim_stale_tool_results(conversation)
         try:
             response = model_fn(conversation)
         except KeyboardInterrupt:
