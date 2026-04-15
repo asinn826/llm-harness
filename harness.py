@@ -407,6 +407,8 @@ def confirm_and_run(tool_call: dict, tools: dict, confirm_fn=None, result_fn=Non
 
     try:
         result = str(tools[tool_name](**args))
+    except KeyboardInterrupt:
+        result = "Tool call interrupted by user."
     except Exception as e:
         result = f"Error running tool: {e}"
 

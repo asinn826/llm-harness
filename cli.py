@@ -244,9 +244,16 @@ def confirm_tool(tool_name: str, args: dict) -> bool:
     This is passed as confirm_fn to run_conversation_turn — it's the bridge
     between the harness (which knows about tools) and the CLI (which knows
     about presentation).
+
+    Ctrl+C during the prompt cancels the tool call (returns False) instead
+    of exiting the harness.
     """
     print_tool_call(tool_name, args)
-    response = console.input("  [dim]Run this? \\[Y/n] [/dim]").strip().lower()
+    try:
+        response = console.input("  [dim]Run this? \\[Y/n] [/dim]").strip().lower()
+    except KeyboardInterrupt:
+        console.print("\n  [dim]Tool call cancelled.[/dim]")
+        return False
     return response in ("", "y")
 
 
