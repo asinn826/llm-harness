@@ -474,12 +474,15 @@ def load_model_hf(model_id: str):
 
         try:
             processor = AutoProcessor.from_pretrained(model_id, token=token)
+            # Load to MPS directly. device_map="auto" with accelerate can
+            # offload layers to disk on memory-constrained Macs, causing
+            # 10x slowdown as weights shuttle between disk and GPU.
+            device = "mps" if torch.backends.mps.is_available() else "cpu"
             model = AutoModelForCausalLM.from_pretrained(
                 model_id,
-                dtype="auto",
-                device_map="auto",
+                torch_dtype=torch.float16,
                 token=token,
-            )
+            ).to(device)
             model.eval()
             sys.stdout.write('\r\033[K')
             sys.stdout.flush()
