@@ -251,7 +251,11 @@ def confirm_tool(tool_name: str, args: dict):
     about presentation).
     """
     print_tool_call(tool_name, args)
-    response = console.input("  [dim]Run this? \\[Y/n/edit] [/dim]").strip()
+    try:
+        response = console.input("  [dim]Run this? \\[Y/n/edit] [/dim]").strip()
+    except (KeyboardInterrupt, EOFError):
+        console.print("\n  [dim]Tool call cancelled.[/dim]")
+        return False
     if response.lower() in ("", "y"):
         return True
     if response.lower() == "n":

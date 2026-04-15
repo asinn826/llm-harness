@@ -619,15 +619,19 @@ def main():
                 console.print(f"\n[dim]Already using {model_id}.[/dim]\n")
             continue
 
-        response = run_conversation_turn(
-            user_input,
-            conversation,
-            model_fn,
-            TOOLS,
-            confirm_fn=confirm_tool,
-            result_fn=print_tool_result,
-            display_fn=print_tool_call,
-        )
+        try:
+            response = run_conversation_turn(
+                user_input,
+                conversation,
+                model_fn,
+                TOOLS,
+                confirm_fn=confirm_tool,
+                result_fn=print_tool_result,
+                display_fn=print_tool_call,
+            )
+        except KeyboardInterrupt:
+            console.print("\n[dim]Interrupted.[/dim]")
+            continue
 
         print_assistant(response)
 
