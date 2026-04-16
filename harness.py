@@ -476,7 +476,7 @@ def _trim_stale_tool_results(conversation: list, keep_recent: int = 2):
     """Replace old tool results with compact summaries.
 
     Keeps the last `keep_recent` user turns' tool results intact.
-    Older tool results > 200 chars are replaced with a smart summary
+    Older tool results > 500 chars are replaced with a smart summary
     that preserves the tool name and key content (event titles, sender
     names, etc.) without using the model.
     """
@@ -493,7 +493,7 @@ def _trim_stale_tool_results(conversation: list, keep_recent: int = 2):
     # Replace tool results before the cutoff
     for i in range(cutoff_idx):
         msg = conversation[i]
-        if msg["role"] != "tool" or len(msg["content"]) <= 200:
+        if msg["role"] != "tool" or len(msg["content"]) <= 500:
             continue
         # Already trimmed on a previous iteration
         if msg["content"].startswith("[trimmed "):
