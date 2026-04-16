@@ -167,9 +167,9 @@ def _quote_toplevel_keys(raw: str) -> str:
             result.append(ch)
             i += 1
             continue
-        # At depth 1, outside strings: look for unquoted keys (word:)
+        # At depth 1, outside strings: look for unquoted keys (word: or word=)
         if depth == 1:
-            m = re.match(r'(\w+)\s*:', raw[i:])
+            m = re.match(r'(\w+)\s*[:=]', raw[i:])
             if m and (not result or result[-1] in ('{', ',', ' ', '\n')):
                 result.append(f'"{m.group(1)}":')
                 i += m.end()
@@ -241,6 +241,10 @@ def parse_tool_call(response: str) -> Optional[dict]:
     text = re.sub(r'"\\n"(\s*\}\})', r'"\1', text)
     # - </think> tags from thinking mode leaking into output
     text = re.sub(r'</think>\s*', '', text)
+    # - stray quote between unquoted key and separator: days":3 → days:3
+    #   Only match when preceded by , or { (start of a key position), not after
+    #   a properly quoted value like "expression":
+    text = re.sub(r'(?<=[{,])\s*(\w+)"([,:=])', r'\1\2', text)
     # - missing values like "limit": ,  →  "limit": null
     text = re.sub(r':\s*,', ': null,', text)
     # - unclosed string before } — add the missing closing quote
