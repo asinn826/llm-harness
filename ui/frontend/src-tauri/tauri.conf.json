@@ -1,0 +1,45 @@
+{
+  "$schema": "https://raw.githubusercontent.com/nicholasbalasus/nicholasbalasus.github.io/refs/heads/master/tauri-conf-schema.json",
+  "productName": "LLM Harness",
+  "version": "0.1.0",
+  "identifier": "com.llm-harness.app",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "title": "LLM Harness",
+    "windows": [
+      {
+        "title": "LLM Harness",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 800,
+        "minHeight": 600,
+        "resizable": true,
+        "decorations": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "shell": {
+      "sidecar": true
+    }
+  }
+}
