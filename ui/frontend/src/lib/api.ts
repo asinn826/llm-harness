@@ -1,0 +1,73 @@
+/** API client for the FastAPI backend. */
+
+import type { ModelsResponse, Session, Message } from "./types";
+
+const BASE = "/api";
+
+async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: res.statusText }));
+    throw new Error(body.detail || `HTTP ${res.status}`);
+  }
+  return res.json();
+}
+
+// ── Models ──────────────────────────────────────────────────────────────
+
+export const models = {
+  list: () => request<ModelsResponse>("/models"),
+
+  current: () =>
+    request<{ loaded: boolean; model_id?: string; backend?: string; status?: string }>(
+      "/models/current"
+    ),
+
+  load: (model_id: string, backend?: string) =>
+    request<{ status: string; model: { model_id: string; backend: string } }>(
+      "/models/load",
+      { method: "POST", body: JSON.stringify({ model_id, backend }) }
+    ),
+
+  unload: () =>
+    request<{ status: string }>("/models/unload", { method: "POST" }),
+};
+
+// ── Sessions ────────────────────────────────────────────────────────────
+
+export const sessions = {
+  list: (limit = 50, offset = 0) =>
+    request<Session[]>(`/sessions?limit=${limit}&offset=${offset}`),
+
+  get: (id: string) => request<Session>(`/sessions/${id}`),
+
+  create: (title = "New session", is_compare = false) =>
+    request<Session>("/sessions", {
+      method: "POST",
+      body: JSON.stringify({ title, is_compare }),
+    }),
+
+  delete: (id: string) =>
+    request<{ status: string }>(`/sessions/${id}`, { method: "DELETE" }),
+
+  update: (id: string, title: string) =>
+    request<{ status: string }>(`/sessions/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify({ title }),
+    }),
+
+  fork: (id: string, from_position: number) =>
+    request<Session>(`/sessions/${id}/fork`, {
+      method: "POST",
+      body: JSON.stringify({ from_position }),
+    }),
+
+  messages: (id: string, limit = 1000, offset = 0) =>
+    request<Message[]>(`/sessions/${id}/messages?limit=${limit}&offset=${offset}`),
+
+  search: (query: string) =>
+    request<Session[]>(`/sessions/search?q=${encodeURIComponent(query)}`),
+};
