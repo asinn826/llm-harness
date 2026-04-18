@@ -12,3 +12,9 @@ build/
 ~/.cache/huggingface/
 .venv/
 .worktrees/
+.superpowers/
+
+# UI build artifacts
+ui/frontend/dist/
+ui/frontend/node_modules/
+ui/frontend/src-tauri/target/
