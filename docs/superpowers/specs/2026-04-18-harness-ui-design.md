@@ -65,7 +65,7 @@ The primary conversation interface with a persistent sidebar.
 **Sidebar (left, collapsible to icon rail):**
 - **Model switcher** (top) — shows active model name, backend, quantization, status indicator (ready/loading). Click to open model picker dropdown. One-click switch without leaving the chat.
 - **Session list** — grouped by time (Today, Yesterday, This Week). Each entry shows title, model color dot(s), turn count, relative time. Active session highlighted with accent border.
-- **Bottom icon row** — navigation to Models, Compare, Settings views.
+- **Bottom icon row** — Lucide icons for navigation: `Package` (Models), `Columns2` (Compare), `Settings` (Settings).
 
 **Chat area (right):**
 - User messages in subtle card style, assistant messages with markdown rendering.
@@ -83,7 +83,7 @@ The primary conversation interface with a persistent sidebar.
 Side-by-side model comparison — the killer local-model feature.
 
 **Layout:**
-- Icon-only sidebar (collapsed) to maximize horizontal space.
+- Icon-only sidebar (collapsed, Lucide icons: `MessageSquare`, `Columns2`, `Package`, `Clock`, `Settings`) to maximize horizontal space.
 - **Model selector bar** across top: colored chips for selected models, "+ Add model" button, max 3 models. Note: "Models run sequentially (one GPU)" displayed as a subtle hint.
 - **Split panels** — one per model, each with:
   - Color-coded header: model name, backend, quantization.
@@ -130,13 +130,18 @@ Persistent, searchable conversation history.
 
 ---
 
-## Shared Design Language
+## Design Principles
 
-- **Dark theme** — deep navy/charcoal background (#1a1a2e), consistent with developer tool aesthetics.
-- **Model color coding** — each model gets a persistent color (assigned on first use) that appears everywhere: sidebar dots, compare panel headers, session list indicators.
-- **Collapsible sidebar** — full sidebar in Chat and Sessions views, icon rail in Compare and Models views. User can toggle manually.
-- **Typography** — system font stack, monospace for code blocks and tool calls.
-- **Component library** — shadcn/ui adapted to the dark theme.
+This UI must feel hand-crafted — not like an AI-generated template. Reference points: Linear (density + clarity), Raycast (speed + polish), Warp (terminal aesthetics). Avoid the generic "dark mode chat app" look.
+
+- **No emoji icons anywhere.** Sidebar navigation, badges, status indicators — all use Lucide icons (ships with shadcn/ui). Emoji in user-generated content only.
+- **Intentional color palette** — not just "dark mode defaults." A tight palette with 2-3 accent colors, careful use of opacity layers for depth. Avoid pure black backgrounds — use warm or cool dark tones with subtle gradients where appropriate.
+- **Model color coding** — each model gets a persistent muted color (assigned on first use) that appears everywhere: sidebar dots, compare panel headers, session list indicators. Colors should be desaturated enough to feel professional, not candy-colored.
+- **Typography hierarchy** — Inter or system font stack for UI, JetBrains Mono for code/tool calls. Deliberate size scale (not just sm/md/lg). Use font weight and opacity for hierarchy, not just size.
+- **Density done right** — information-dense without feeling cramped. Tight vertical rhythm, consistent 4px grid. Inspired by Linear's ability to show a lot without overwhelming.
+- **Subtle motion** — transitions on sidebar collapse, panel switches, model loading states. 150-200ms, ease-out. No bouncing or spring physics. Motion should feel mechanical and precise.
+- **Collapsible sidebar** — full sidebar in Chat and Sessions views, icon rail in Compare and Models views. User can toggle manually. Icon rail uses 16-20px Lucide icons, not emoji.
+- **Component library** — shadcn/ui as a foundation, restyled to match the palette. Don't use shadcn defaults — they're recognizable.
 
 ---
 
