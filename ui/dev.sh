@@ -33,7 +33,7 @@ check_rust() {
 
 start_backend() {
     echo -e "${GREEN}Starting backend...${RESET} ${DIM}:8000${RESET}"
-    python3 -m uvicorn ui.backend.server:app \
+    python3.11 -m uvicorn ui.backend.server:app \
         --host 127.0.0.1 \
         --port 8000 \
         --reload \
@@ -46,9 +46,15 @@ start_backend() {
 
 cleanup() {
     echo -e "\n${DIM}Shutting down...${RESET}"
-    [ -n "$BACKEND_PID" ] && kill $BACKEND_PID 2>/dev/null
-    [ -n "$TAURI_PID" ] && kill $TAURI_PID 2>/dev/null
-    [ -n "$FRONTEND_PID" ] && kill $FRONTEND_PID 2>/dev/null
+    # Kill process groups so child processes (uvicorn reloader, cargo) die too
+    for pid in $BACKEND_PID $TAURI_PID $FRONTEND_PID; do
+        [ -n "$pid" ] && kill -TERM -- -$pid 2>/dev/null || kill -TERM $pid 2>/dev/null
+    done
+    # Short grace period, then force kill stragglers
+    sleep 0.5
+    for pid in $BACKEND_PID $TAURI_PID $FRONTEND_PID; do
+        [ -n "$pid" ] && kill -9 -- -$pid 2>/dev/null || kill -9 $pid 2>/dev/null
+    done
     wait 2>/dev/null
     echo -e "${DIM}Done.${RESET}"
 }
