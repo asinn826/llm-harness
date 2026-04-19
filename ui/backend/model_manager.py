@@ -288,10 +288,11 @@ class ModelManager:
             chunks.append(token)
             yield token
 
-    def _generate_hf(self, conversation: list) -> str:
+    def _generate_hf(self, conversation: list):
         """Generate with HuggingFace transformers, yielding tokens."""
         from transformers import TextIteratorStreamer
         import threading
+        import queue
 
         messages = [{"role": "system", "content": self._system_prompt}] + conversation
 
@@ -315,11 +316,17 @@ class ModelManager:
         gen_inputs = {k: v for k, v in inputs.items() if k not in _MULTIMODAL_KEYS}
 
         streamer = TextIteratorStreamer(self._tokenizer, skip_prompt=True, skip_special_tokens=True)
+        error_box = []
 
         def _generate():
-            with torch.no_grad():
-                self._model.generate(**gen_inputs, max_new_tokens=2048, do_sample=False,
-                                     repetition_penalty=1.2, streamer=streamer)
+            try:
+                with torch.no_grad():
+                    self._model.generate(**gen_inputs, max_new_tokens=2048, do_sample=False,
+                                         repetition_penalty=1.2, streamer=streamer)
+            except Exception as e:
+                error_box.append(e)
+                # Unblock the streamer by signaling end-of-stream
+                streamer.text_queue.put(streamer.stop_signal)
 
         thread = threading.Thread(target=_generate, daemon=True)
         thread.start()
@@ -327,7 +334,11 @@ class ModelManager:
         for token in streamer:
             yield token
 
-        thread.join(timeout=1)
+        thread.join(timeout=5)
+
+        # If generation failed, raise the error after the streamer unblocks
+        if error_box:
+            raise error_box[0]
 
     def _fallback_prompt(self, messages: list) -> str:
         lines = []
