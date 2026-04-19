@@ -31,6 +31,7 @@ Desktop application for the LLM Harness — browse, compare, and chat with local
 
 - **Python 3.9+** with the harness dependencies installed (`pip install -r requirements.txt`)
 - **Node.js 20+** and npm
+- **Rust** (for the native desktop window): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
 - **FastAPI dependencies:** `pip install fastapi 'uvicorn[standard]' websockets`
 
 ### Run
@@ -39,21 +40,24 @@ Desktop application for the LLM Harness — browse, compare, and chat with local
 # Install frontend dependencies (first time only)
 cd ui/frontend && npm install && cd ../..
 
-# Start both backend and frontend
+# Launch the desktop app (native window with hot reload)
 ./ui/dev.sh
 ```
 
-This starts:
-- **Backend** on `http://localhost:8000` (FastAPI with hot reload)
-- **Frontend** on `http://localhost:5173` (Vite dev server with HMR)
+This starts the FastAPI backend, then launches a native Tauri window with Vite hot reload. No browser needed.
 
-The frontend proxies API requests to the backend automatically.
+### Without Rust
 
-### Run individually
+If you don't have Rust installed yet, use browser mode as a fallback:
 
 ```bash
-./ui/dev.sh --backend   # Backend only (port 8000)
-./ui/dev.sh --frontend  # Frontend only (port 5173)
+./ui/dev.sh --browser   # Opens in your default browser instead of a native window
+```
+
+### Other modes
+
+```bash
+./ui/dev.sh --backend   # Backend only (for debugging)
 ```
 
 ### Run tests
@@ -68,34 +72,27 @@ python3 -m pytest tests/ -v
 
 ## Building for Production
 
-### Browser-based (no Tauri)
+### Desktop App (.dmg)
 
 ```bash
-# Build the frontend
-cd ui/frontend && npm run build && cd ../..
-
-# Serve with FastAPI (production)
-uvicorn ui.backend.server:app --host 0.0.0.0 --port 8000
-```
-
-Then add static file serving to the FastAPI app to serve the built frontend from `ui/frontend/dist/`.
-
-### Desktop App (Tauri)
-
-Requires [Rust](https://rustup.rs/) installed.
-
-```bash
-# Install Rust (if needed)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
-# Build the desktop app
 cd ui/frontend
 npx tauri build
 ```
 
-The `.dmg` (macOS) or installer will be in `ui/frontend/src-tauri/target/release/bundle/`.
+The `.dmg` (macOS) will be in `ui/frontend/src-tauri/target/release/bundle/dmg/`. Double-click to install like any Mac app.
 
-**Note:** The Tauri shell spawns the FastAPI backend as a child process. You need Python 3.9+ available on the system PATH for the desktop app to work.
+**Runtime requirement:** Python 3.9+ must be on the system PATH. The app spawns the FastAPI backend as a child process on launch — no separate server to manage.
+
+### Browser fallback
+
+If you need to run without a native window (e.g., remote server):
+
+```bash
+cd ui/frontend && npm run build && cd ../..
+uvicorn ui.backend.server:app --host 0.0.0.0 --port 8000
+```
+
+Then add static file serving to the FastAPI app to serve `ui/frontend/dist/`.
 
 ## Project Structure
 
