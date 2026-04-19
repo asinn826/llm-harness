@@ -187,18 +187,16 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
       {/* Scrollable messages — takes all vertical space above input */}
       <div style={{ flex: "1 1 0%", overflowY: "auto", width: "100%" }}>
         {!hasMessages && (
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
-            <div style={{ textAlign: "center" }}>
-              <div style={{ color: "var(--text-tertiary)", fontSize: 14, marginBottom: 4 }}>
-                {currentModelId
-                  ? `Ready — ${currentModelId.split("/").pop()}`
-                  : "Load a model to start"}
-              </div>
-              <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
-                {currentModelId
-                  ? "Send a message to start a conversation"
-                  : "Use the model switcher in the sidebar"}
-              </div>
+          <div style={{ padding: "24px", paddingTop: "40vh" }}>
+            <div style={{ color: "var(--text-tertiary)", fontSize: 14, marginBottom: 4 }}>
+              {currentModelId
+                ? `Ready — ${currentModelId.split("/").pop()}`
+                : "Load a model to start"}
+            </div>
+            <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
+              {currentModelId
+                ? "Send a message to start a conversation"
+                : "Use the model switcher in the sidebar"}
             </div>
           </div>
         )}
