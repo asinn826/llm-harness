@@ -94,7 +94,6 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
           if (msg.needs_confirmation) {
             setPendingToolCall({ tool: msg.tool, args: msg.args });
           }
-          // Read-only tools auto-approve, just show a placeholder
           break;
 
         case "tool_result":
@@ -111,14 +110,18 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
           ]);
           break;
 
-        case "done":
-          if (streamingRef.current) {
+        case "done": {
+          // Use streaming content if we have it, otherwise use the
+          // response from the server (covers cases where tokens streamed
+          // but were consumed by tool-call parsing on the server side)
+          const finalContent = streamingRef.current || ("response" in msg ? msg.response : "") || "";
+          if (finalContent) {
             setMessages((prev) => [
               ...prev,
               {
                 id: `done-${Date.now()}`,
                 role: "assistant",
-                content: streamingRef.current,
+                content: finalContent,
                 modelId: currentModelId,
                 tokensGenerated: msg.tokens,
                 generationTimeMs: msg.time_ms,
@@ -129,6 +132,7 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
           setStreamingContent("");
           setIsGenerating(false);
           break;
+        }
 
         case "error":
           setIsGenerating(false);
@@ -154,7 +158,6 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
   });
 
   const handleSend = (content: string) => {
-    // Add user message to display immediately
     setMessages((prev) => [
       ...prev,
       { id: `user-${Date.now()}`, role: "user", content },
@@ -202,7 +205,7 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
           </div>
         )}
 
-        <div className="max-w-3xl mx-auto py-4">
+        <div className="py-4 px-6">
           {messages.map((msg) => (
             <ChatMessage
               key={msg.id}
@@ -241,19 +244,17 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
       </div>
 
       {/* Input */}
-      <div className="max-w-3xl mx-auto w-full">
-        <ChatInput
-          onSend={handleSend}
-          disabled={isGenerating || wsState !== "open"}
-          placeholder={
-            wsState !== "open"
-              ? "Connecting..."
-              : isGenerating
-                ? "Generating..."
-                : "Message..."
-          }
-        />
-      </div>
+      <ChatInput
+        onSend={handleSend}
+        disabled={isGenerating || wsState !== "open"}
+        placeholder={
+          wsState !== "open"
+            ? "Connecting..."
+            : isGenerating
+              ? "Generating..."
+              : "Message..."
+        }
+      />
     </div>
   );
 }
