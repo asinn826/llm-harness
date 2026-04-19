@@ -14,41 +14,83 @@ interface UseWebSocketOptions {
   autoConnect?: boolean;
 }
 
+const RECONNECT_DELAY = 1000;
+const MAX_RECONNECT_DELAY = 10000;
+
 export function useWebSocket({ path, onMessage, autoConnect = true }: UseWebSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null);
   const onMessageRef = useRef(onMessage);
   onMessageRef.current = onMessage;
 
   const [state, setState] = useState<ConnectionState>("closed");
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const reconnectDelay = useRef(RECONNECT_DELAY);
+  const shouldReconnect = useRef(true);
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    // Don't connect if already open or connecting
+    if (
+      wsRef.current?.readyState === WebSocket.OPEN ||
+      wsRef.current?.readyState === WebSocket.CONNECTING
+    ) {
+      return;
+    }
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const url = `${protocol}//${window.location.host}${path}`;
-    const ws = new WebSocket(url);
 
     setState("connecting");
 
-    ws.onopen = () => setState("open");
-    ws.onclose = () => {
-      setState("closed");
-      wsRef.current = null;
-    };
-    ws.onerror = () => setState("error");
-    ws.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data) as WSServerMessage;
-        onMessageRef.current(msg);
-      } catch {
-        // ignore malformed messages
-      }
-    };
+    try {
+      const ws = new WebSocket(url);
 
-    wsRef.current = ws;
+      ws.onopen = () => {
+        setState("open");
+        reconnectDelay.current = RECONNECT_DELAY; // reset on successful connect
+      };
+
+      ws.onclose = () => {
+        setState("closed");
+        wsRef.current = null;
+        // Auto-reconnect
+        if (shouldReconnect.current) {
+          reconnectTimer.current = setTimeout(() => {
+            connect();
+          }, reconnectDelay.current);
+          // Exponential backoff, capped
+          reconnectDelay.current = Math.min(
+            reconnectDelay.current * 1.5,
+            MAX_RECONNECT_DELAY
+          );
+        }
+      };
+
+      ws.onerror = () => {
+        setState("error");
+        // onclose will fire after onerror, which triggers reconnect
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data) as WSServerMessage;
+          onMessageRef.current(msg);
+        } catch {
+          // ignore malformed messages
+        }
+      };
+
+      wsRef.current = ws;
+    } catch {
+      setState("error");
+    }
   }, [path]);
 
   const disconnect = useCallback(() => {
+    shouldReconnect.current = false;
+    if (reconnectTimer.current) {
+      clearTimeout(reconnectTimer.current);
+      reconnectTimer.current = null;
+    }
     wsRef.current?.close();
     wsRef.current = null;
   }, []);
@@ -60,8 +102,13 @@ export function useWebSocket({ path, onMessage, autoConnect = true }: UseWebSock
   }, []);
 
   useEffect(() => {
-    if (autoConnect) connect();
-    return disconnect;
+    if (autoConnect) {
+      shouldReconnect.current = true;
+      connect();
+    }
+    return () => {
+      disconnect();
+    };
   }, [autoConnect, connect, disconnect]);
 
   return { state, connect, disconnect, send };
