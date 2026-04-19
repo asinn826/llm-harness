@@ -16,7 +16,6 @@ export function ChatInput({ onSend, disabled, placeholder = "Message..." }: Chat
     if (!trimmed || disabled) return;
     onSend(trimmed);
     setValue("");
-    // Reset height
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
@@ -29,7 +28,6 @@ export function ChatInput({ onSend, disabled, placeholder = "Message..." }: Chat
     }
   };
 
-  // Auto-resize textarea
   useEffect(() => {
     const ta = textareaRef.current;
     if (ta) {
@@ -39,8 +37,19 @@ export function ChatInput({ onSend, disabled, placeholder = "Message..." }: Chat
   }, [value]);
 
   return (
-    <div className="px-4 py-3 border-t border-[var(--border-subtle)]">
-      <div className="flex items-end gap-2 bg-[var(--bg-surface)] rounded-lg border border-[var(--border-subtle)] focus-within:border-[var(--accent)] transition-colors duration-[var(--duration-fast)] px-3 py-2">
+    <div style={{ padding: "12px 24px", borderTop: "1px solid var(--border-subtle)", width: "100%" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "flex-end",
+          gap: 8,
+          background: "var(--bg-surface)",
+          borderRadius: 8,
+          border: "1px solid var(--border-subtle)",
+          padding: "8px 12px",
+          width: "100%",
+        }}
+      >
         <textarea
           ref={textareaRef}
           value={value}
@@ -49,18 +58,36 @@ export function ChatInput({ onSend, disabled, placeholder = "Message..." }: Chat
           placeholder={placeholder}
           disabled={disabled}
           rows={1}
-          className="flex-1 bg-transparent text-sm text-[var(--text-primary)] placeholder:text-[var(--text-muted)] resize-none outline-none min-h-[24px] max-h-[200px] leading-normal"
+          style={{
+            flex: 1,
+            background: "transparent",
+            fontSize: 14,
+            color: "var(--text-primary)",
+            resize: "none",
+            outline: "none",
+            border: "none",
+            minHeight: 24,
+            maxHeight: 200,
+            lineHeight: 1.5,
+            fontFamily: "inherit",
+          }}
         />
         <button
           onClick={handleSend}
           disabled={!value.trim() || disabled}
-          className={`
-            w-7 h-7 flex items-center justify-center rounded-md shrink-0
-            transition-all duration-[var(--duration-fast)]
-            ${value.trim() && !disabled
-              ? "bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)]"
-              : "bg-[var(--bg-elevated)] text-[var(--text-muted)]"}
-          `}
+          style={{
+            width: 28,
+            height: 28,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: 6,
+            border: "none",
+            cursor: value.trim() && !disabled ? "pointer" : "default",
+            flexShrink: 0,
+            background: value.trim() && !disabled ? "var(--accent)" : "var(--bg-elevated)",
+            color: value.trim() && !disabled ? "white" : "var(--text-muted)",
+          }}
         >
           <ArrowUp size={16} strokeWidth={2} />
         </button>
