@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, type ReactNode } from "react";
 import {
   MessageSquare,
   Columns2,
@@ -23,6 +23,8 @@ interface SidebarProps {
   onNewSession: () => void;
   collapsed: boolean;
   onToggleCollapse: () => void;
+  /** Slot for the model switcher, rendered below the header */
+  modelSwitcher?: ReactNode;
 }
 
 const NAV_ITEMS: { view: View; icon: typeof MessageSquare; label: string }[] = [
@@ -40,6 +42,7 @@ export function Sidebar({
   onNewSession,
   collapsed,
   onToggleCollapse,
+  modelSwitcher,
 }: SidebarProps) {
   const [recentSessions, setRecentSessions] = useState<Session[]>([]);
 
@@ -95,9 +98,9 @@ export function Sidebar({
   }
 
   return (
-    <div className="flex flex-col w-60 bg-[var(--bg-secondary)] border-r border-[var(--border-subtle)] shrink-0">
+    <div className="flex flex-col w-60 h-screen bg-[var(--bg-secondary)] border-r border-[var(--border-subtle)] shrink-0 overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-3 border-b border-[var(--border-subtle)]">
+      <div className="flex items-center justify-between px-3 py-3 border-b border-[var(--border-subtle)] shrink-0">
         <span className="text-[var(--text-primary)] font-semibold text-sm tracking-tight">
           Harness
         </span>
@@ -119,8 +122,11 @@ export function Sidebar({
         </div>
       </div>
 
+      {/* Model switcher */}
+      {modelSwitcher && <div className="shrink-0">{modelSwitcher}</div>}
+
       {/* Navigation */}
-      <div className="flex gap-0.5 px-2 py-2 border-b border-[var(--border-subtle)]">
+      <div className="flex gap-0.5 px-2 py-2 border-b border-[var(--border-subtle)] shrink-0">
         {NAV_ITEMS.map(({ view, icon: Icon, label }) => (
           <button
             key={view}
@@ -178,7 +184,7 @@ export function Sidebar({
       </div>
 
       {/* Bottom */}
-      <div className="px-2 py-2 border-t border-[var(--border-subtle)]">
+      <div className="px-2 py-2 border-t border-[var(--border-subtle)] shrink-0">
         <button
           onClick={() => onViewChange("settings")}
           className={`
