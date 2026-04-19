@@ -183,9 +183,9 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
   const hasMessages = messages.length > 0 || isGenerating;
 
   return (
-    <>
-      {/* Scrollable messages — takes all vertical space above input */}
-      <div style={{ flex: "1 1 0%", overflowY: "auto", width: "100%" }}>
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, height: "100%" }}>
+      {/* Scrollable messages */}
+      <div style={{ flex: 1, overflowY: "auto" }}>
         {!hasMessages && (
           <div style={{ padding: "24px", paddingTop: "40vh" }}>
             <div style={{ color: "var(--text-tertiary)", fontSize: 14, marginBottom: 4 }}>
@@ -239,20 +239,18 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
         )}
       </div>
 
-      {/* Input bar — pinned to bottom, full width */}
-      <div style={{ flexShrink: 0, width: "100%" }}>
-        <ChatInput
-          onSend={handleSend}
-          disabled={isGenerating || wsState !== "open"}
-          placeholder={
-            wsState !== "open"
-              ? "Connecting..."
-              : isGenerating
-                ? "Generating..."
-                : "Message..."
-          }
-        />
-      </div>
-    </>
+      {/* Input bar — pinned to bottom */}
+      <ChatInput
+        onSend={handleSend}
+        disabled={isGenerating || wsState !== "open"}
+        placeholder={
+          wsState !== "open"
+            ? "Connecting..."
+            : isGenerating
+              ? "Generating..."
+              : "Message..."
+        }
+      />
+    </div>
   );
 }

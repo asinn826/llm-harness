@@ -39,12 +39,11 @@ export default function App() {
     setCurrentView("chat");
   }, []);
 
-  // Auto-collapse sidebar for compare and models views
   const isCompactView = currentView === "compare" || currentView === "models";
   const effectiveCollapsed = isCompactView || sidebarCollapsed;
 
   return (
-    <div className="flex h-screen bg-[var(--bg-primary)] overflow-hidden">
+    <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "var(--bg-primary)" }}>
       <Sidebar
         currentView={currentView}
         onViewChange={setCurrentView}
@@ -56,7 +55,7 @@ export default function App() {
         modelSwitcher={<ModelSwitcher onModelLoaded={handleModelLoaded} />}
       />
 
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
         {currentView === "chat" && (
           <ChatView
             sessionId={activeSessionId}
@@ -68,8 +67,8 @@ export default function App() {
         {currentView === "models" && <ModelsView onModelLoaded={handleModelLoaded} />}
         {currentView === "sessions" && <SessionsView onResumeSession={handleResumeSession} />}
         {currentView === "settings" && (
-          <div className="flex-1 flex items-center justify-center">
-            <div className="text-center text-[var(--text-muted)] text-sm">
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <div style={{ textAlign: "center", color: "var(--text-muted)", fontSize: 14 }}>
               Settings coming soon
             </div>
           </div>
