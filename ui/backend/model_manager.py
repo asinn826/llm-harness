@@ -11,6 +11,8 @@ from pathlib import Path
 from typing import Optional
 
 import torch
+from dotenv import load_dotenv
+load_dotenv()
 
 # Add project root to path so we can import harness modules
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -158,25 +160,84 @@ class ModelManager:
         return tokenizer, model
 
     def _load_hf(self, model_id: str, progress_callback=None):
-        """Load via HuggingFace transformers without CLI spinners."""
+        """Load via HuggingFace transformers with progress tracking.
+
+        Patches HF's tqdm to report download/load progress via callback.
+        Mirrors main.py's load_model_hf but without CLI spinners.
+        """
         import os
+        import logging
+        import importlib
         import warnings
         from transformers import AutoProcessor, AutoModelForCausalLM, logging as hf_logging
+        from huggingface_hub.utils import GatedRepoError, RepositoryNotFoundError
 
         hf_logging.set_verbosity_error()
+        logging.getLogger("transformers").setLevel(logging.ERROR)
         warnings.filterwarnings("ignore", message=".*unauthenticated.*", category=UserWarning)
 
         token = os.environ.get("HF_TOKEN") or None
-        processor = AutoProcessor.from_pretrained(model_id, token=token)
 
-        device = "mps" if torch.backends.mps.is_available() else "cpu"
-        model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            torch_dtype=torch.float16,
-            token=token,
-        ).to(device)
-        model.eval()
-        return processor, model
+        # Patch HF's tqdm to report progress via callback
+        _hf_tqdm_module = importlib.import_module('huggingface_hub.utils.tqdm')
+        _orig_hf_tqdm = _hf_tqdm_module.tqdm
+
+        class _ProgressTqdm(_orig_hf_tqdm):
+            def __init__(self, *args, **kwargs):
+                kwargs['file'] = open(os.devnull, 'w')
+                super().__init__(*args, **kwargs)
+
+            def update(self, n=1):
+                super().update(n)
+                if self.total and progress_callback:
+                    pct = self.n / self.total
+                    desc = getattr(self, 'desc', None) or model_id
+                    progress_callback(LoadProgress(
+                        model_id=model_id, progress=pct,
+                        status="loading", message=f"Downloading {desc}",
+                    ))
+
+        _hf_tqdm_module.tqdm = _ProgressTqdm
+
+        # Also patch transformers' internal tqdm (for "Loading checkpoint shards")
+        from transformers.utils import logging as tf_logging
+        _orig_tf_tqdm = tf_logging.tqdm_lib.tqdm
+        tf_logging.tqdm_lib.tqdm = _ProgressTqdm
+
+        try:
+            if progress_callback:
+                progress_callback(LoadProgress(
+                    model_id=model_id, progress=0.1,
+                    status="loading", message="Loading tokenizer...",
+                ))
+
+            processor = AutoProcessor.from_pretrained(model_id, token=token)
+
+            if progress_callback:
+                progress_callback(LoadProgress(
+                    model_id=model_id, progress=0.3,
+                    status="loading", message="Loading model weights...",
+                ))
+
+            device = "mps" if torch.backends.mps.is_available() else "cpu"
+            model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                torch_dtype=torch.float16,
+                token=token,
+            ).to(device)
+            model.eval()
+            return processor, model
+
+        except GatedRepoError:
+            raise RuntimeError(
+                f"{model_id} is a gated model. Accept terms at huggingface.co/{model_id} "
+                "and add HF_TOKEN to your .env file."
+            )
+        except RepositoryNotFoundError:
+            raise RuntimeError(f"Model not found: {model_id}")
+        finally:
+            _hf_tqdm_module.tqdm = _orig_hf_tqdm
+            tf_logging.tqdm_lib.tqdm = _orig_tf_tqdm
 
     def unload_model(self):
         """Unload the current model and free GPU memory."""

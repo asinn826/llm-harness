@@ -15,6 +15,9 @@ export function ModelSwitcher({ onModelLoaded }: ModelSwitcherProps) {
   const [currentModel, setCurrentModel] = useState<string | null>(null);
   const [currentBackend, setCurrentBackend] = useState<string | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
+  const [loadProgress, setLoadProgress] = useState(0);
+  const [loadMessage, setLoadMessage] = useState("");
+  const [loadError, setLoadError] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const fetchModels = async () => {
@@ -36,30 +39,64 @@ export function ModelSwitcher({ onModelLoaded }: ModelSwitcherProps) {
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        setIsOpen(false);
+        if (!loading) setIsOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, []);
+  }, [loading]);
 
-  const handleSelect = async (modelId: string, backend: string) => {
+  const handleSelect = (modelId: string, backend: string) => {
     if (modelId === currentModel) {
       setIsOpen(false);
       return;
     }
+
     setLoading(modelId);
-    try {
-      const result = await modelsApi.load(modelId, backend);
-      setCurrentModel(result.model.model_id);
-      setCurrentBackend(result.model.backend);
-      onModelLoaded?.(result.model.model_id, result.model.backend);
-    } catch (err) {
-      console.error("Failed to load model:", err);
-    } finally {
+    setLoadProgress(0);
+    setLoadMessage("Connecting...");
+    setLoadError(null);
+
+    // Use WebSocket for progress-streamed loading
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/models/load`);
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ model_id: modelId, backend }));
+    };
+
+    ws.onmessage = (event) => {
+      const msg = JSON.parse(event.data);
+      switch (msg.type) {
+        case "progress":
+          setLoadProgress(msg.progress);
+          setLoadMessage(msg.message);
+          break;
+        case "done":
+          setCurrentModel(msg.model_id);
+          setCurrentBackend(msg.backend);
+          setLoading(null);
+          setLoadProgress(0);
+          setLoadMessage("");
+          setIsOpen(false);
+          onModelLoaded?.(msg.model_id, msg.backend);
+          fetchModels();
+          ws.close();
+          break;
+        case "error":
+          setLoadError(msg.message);
+          setLoading(null);
+          setLoadProgress(0);
+          setLoadMessage("");
+          ws.close();
+          break;
+      }
+    };
+
+    ws.onerror = () => {
+      setLoadError("Connection failed");
       setLoading(null);
-      setIsOpen(false);
-    }
+    };
   };
 
   const currentDisplay = currentModel
@@ -85,26 +122,49 @@ export function ModelSwitcher({ onModelLoaded }: ModelSwitcherProps) {
           style={{ background: currentModel ? getModelColor(currentModel) : "var(--text-muted)" }}
         />
         <div className="flex-1 text-left min-w-0">
-          <div className="text-xs text-[var(--text-primary)] font-medium truncate">
-            {loading ? "Loading..." : currentDisplay}
-          </div>
-          {currentModel && (
-            <div className="text-[10px] text-[var(--text-tertiary)] flex items-center gap-1">
-              <span>{currentBackend === "mlx" ? "MLX" : "HF"}</span>
-              <span>·</span>
-              <span className="text-[var(--success)]">Ready</span>
-            </div>
+          {loading ? (
+            <>
+              <div className="text-xs text-[var(--text-primary)] font-medium truncate">
+                {loading.split("/").pop()}
+              </div>
+              <div className="text-[10px] text-[var(--text-tertiary)]">
+                {loadMessage || "Loading..."}
+              </div>
+              {/* Progress bar */}
+              <div className="mt-1 h-1 w-full bg-[var(--bg-primary)] rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-[var(--accent)] rounded-full transition-all duration-300 ease-out"
+                  style={{ width: `${Math.max(loadProgress * 100, 2)}%` }}
+                />
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="text-xs text-[var(--text-primary)] font-medium truncate">
+                {currentDisplay}
+              </div>
+              {currentModel && !loadError && (
+                <div className="text-[10px] text-[var(--text-tertiary)] flex items-center gap-1">
+                  <span>{currentBackend === "mlx" ? "MLX" : "HF"}</span>
+                  <span>·</span>
+                  <span className="text-[var(--success)]">Ready</span>
+                </div>
+              )}
+              {loadError && (
+                <div className="text-[10px] text-[var(--error)] truncate">{loadError}</div>
+              )}
+            </>
           )}
         </div>
         {loading ? (
-          <Loader2 size={14} className="text-[var(--text-muted)] animate-spin" />
+          <Loader2 size={14} className="text-[var(--accent)] animate-spin" />
         ) : (
           <ChevronDown size={14} className="text-[var(--text-muted)]" />
         )}
       </button>
 
       {/* Dropdown */}
-      {isOpen && (
+      {isOpen && !loading && (
         <div className="absolute left-3 right-3 top-full mt-1 z-50 bg-[var(--bg-tertiary)] border border-[var(--border-default)] rounded-lg shadow-lg overflow-hidden">
           {/* Recommended */}
           <div className="px-2.5 py-1.5 text-[10px] text-[var(--text-muted)] uppercase tracking-wider">
@@ -114,8 +174,7 @@ export function ModelSwitcher({ onModelLoaded }: ModelSwitcherProps) {
             <button
               key={model.id}
               onClick={() => handleSelect(model.id, model.backend)}
-              disabled={loading !== null}
-              className="w-full flex items-center gap-2.5 px-2.5 py-2 hover:bg-[var(--bg-surface)] transition-colors duration-[var(--duration-fast)] disabled:opacity-50"
+              className="w-full flex items-center gap-2.5 px-2.5 py-2 hover:bg-[var(--bg-surface)] transition-colors duration-[var(--duration-fast)]"
             >
               <div
                 className="w-2 h-2 rounded-full shrink-0"
@@ -134,7 +193,6 @@ export function ModelSwitcher({ onModelLoaded }: ModelSwitcherProps) {
                 </div>
               </div>
               {model.is_loaded && <Check size={14} className="text-[var(--success)] shrink-0" />}
-              {loading === model.id && <Loader2 size={14} className="text-[var(--accent)] animate-spin shrink-0" />}
             </button>
           ))}
 
@@ -148,8 +206,7 @@ export function ModelSwitcher({ onModelLoaded }: ModelSwitcherProps) {
                 <button
                   key={model.id}
                   onClick={() => handleSelect(model.id, model.backend)}
-                  disabled={loading !== null}
-                  className="w-full flex items-center gap-2.5 px-2.5 py-2 hover:bg-[var(--bg-surface)] transition-colors duration-[var(--duration-fast)] disabled:opacity-50"
+                  className="w-full flex items-center gap-2.5 px-2.5 py-2 hover:bg-[var(--bg-surface)] transition-colors duration-[var(--duration-fast)]"
                 >
                   <Cpu size={14} className="text-[var(--text-muted)] shrink-0" />
                   <div className="flex-1 text-left min-w-0">

@@ -59,6 +59,56 @@ async def load_model(req: LoadModelRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.websocket("/ws/models/load")
+async def ws_load_model(ws: WebSocket):
+    """Load a model with progress streaming.
+
+    Client sends: {"model_id": "...", "backend": "..."}
+    Server sends:
+        {"type": "progress", "progress": 0.3, "message": "Loading tokenizer..."}
+        {"type": "done", "model_id": "...", "backend": "..."}
+        {"type": "error", "message": "..."}
+    """
+    await ws.accept()
+    try:
+        raw = await ws.receive_text()
+        msg = json.loads(raw)
+        model_id = msg["model_id"]
+        backend = msg.get("backend")
+
+        loop = asyncio.get_event_loop()
+
+        def progress_callback(p):
+            asyncio.run_coroutine_threadsafe(
+                ws.send_json({
+                    "type": "progress",
+                    "progress": p.progress,
+                    "status": p.status,
+                    "message": p.message,
+                }),
+                loop,
+            )
+
+        info = await asyncio.to_thread(
+            model_manager.load_model, model_id, backend, progress_callback
+        )
+        await ws.send_json({
+            "type": "done",
+            "model_id": info.model_id,
+            "backend": info.backend,
+        })
+    except Exception as e:
+        try:
+            await ws.send_json({"type": "error", "message": str(e)})
+        except Exception:
+            pass
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
 @app.post("/models/unload")
 async def unload_model():
     model_manager.unload_model()

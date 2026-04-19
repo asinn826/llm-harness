@@ -10,7 +10,6 @@
     "beforeBuildCommand": "npm run build"
   },
   "app": {
-    "title": "LLM Harness",
     "windows": [
       {
         "title": "LLM Harness",
@@ -39,7 +38,7 @@
   },
   "plugins": {
     "shell": {
-      "sidecar": true
+      "open": true
     }
   }
 }
