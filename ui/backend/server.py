@@ -230,6 +230,11 @@ async def ws_chat(ws: WebSocket):
 
 async def _handle_chat_message(ws: WebSocket, msg: dict):
     """Process a chat message: generate, handle tool calls, stream tokens."""
+    import threading
+    from .model_manager import parse_tool_call
+    from tools import TOOLS
+    from harness import _trim_stale_tool_results
+
     session_id = msg.get("session_id")
     content = msg["content"]
     model_id = msg.get("model_id")
@@ -259,66 +264,62 @@ async def _handle_chat_message(ws: WebSocket, msg: dict):
 
     # Store user message
     add_message(session_id, "user", content)
-
-    # Run the turn
     conversation.append({"role": "user", "content": content})
-    tool_call_event = asyncio.Event()
-    tool_response_future: asyncio.Future = None
-
-    from .model_manager import parse_tool_call
-    from tools import TOOLS
-    from harness import _trim_stale_tool_results
 
     for iteration in range(10):
         _trim_stale_tool_results(conversation)
 
-        # Generate with streaming
-        chunks = []
+        # Generate with streaming — run generator in a thread,
+        # ferry tokens to the async world via a queue.
+        chunks: list[str] = []
+        error_box: list[Exception] = []
         start_time = time.time()
-
-        gen = model_manager.generate(conversation)
-
-        def _collect_tokens():
-            for token in gen:
-                chunks.append(token)
-            return ''.join(chunks).strip()
-
-        # Run generation in thread, stream tokens to websocket
         loop = asyncio.get_event_loop()
-        token_queue = asyncio.Queue()
-        done_event = asyncio.Event()
-
-        async def _stream_from_queue():
-            while not done_event.is_set() or not token_queue.empty():
-                try:
-                    token = await asyncio.wait_for(token_queue.get(), timeout=0.1)
-                    await ws.send_json({"type": "token", "data": token})
-                except asyncio.TimeoutError:
-                    continue
+        token_queue: asyncio.Queue[str | None] = asyncio.Queue()
 
         def _generate_thread():
             try:
-                for token in gen:
+                for token in model_manager.generate(conversation):
                     chunks.append(token)
                     asyncio.run_coroutine_threadsafe(token_queue.put(token), loop)
+            except Exception as e:
+                error_box.append(e)
             finally:
-                done_event.set()
+                # Sentinel: None signals "generation finished"
+                asyncio.run_coroutine_threadsafe(token_queue.put(None), loop)
 
-        import threading
         gen_thread = threading.Thread(target=_generate_thread, daemon=True)
         gen_thread.start()
 
-        await _stream_from_queue()
-        gen_thread.join(timeout=5)
+        # Stream tokens to the client until we get the sentinel
+        while True:
+            token = await token_queue.get()
+            if token is None:
+                break
+            try:
+                await ws.send_json({"type": "token", "data": token})
+            except Exception:
+                break
+
+        gen_thread.join(timeout=10)
+
+        # Check for generation errors
+        if error_box:
+            await ws.send_json({"type": "error", "message": str(error_box[0])})
+            return
 
         elapsed_ms = int((time.time() - start_time) * 1000)
         response = ''.join(chunks).strip()
         token_count = len(chunks)
 
+        if not response:
+            await ws.send_json({"type": "error", "message": "Model returned empty response"})
+            return
+
         tool_call = parse_tool_call(response)
 
         if tool_call is None:
-            # Plain text response
+            # Plain text response — done
             conversation.append({"role": "assistant", "content": response})
             add_message(session_id, "assistant", response,
                        model_id=current.model_id,
@@ -344,7 +345,6 @@ async def _handle_chat_message(ws: WebSocket, msg: dict):
         args = {k: v for k, v in tool_call.get("args", {}).items() if v is not None}
         needs_confirmation = tool_name in TOOLS and getattr(TOOLS[tool_name], "needs_confirmation", True)
 
-        # Send tool call to client
         await ws.send_json({
             "type": "tool_call",
             "tool": tool_name,
@@ -353,20 +353,15 @@ async def _handle_chat_message(ws: WebSocket, msg: dict):
         })
 
         if needs_confirmation:
-            # Wait for client approval
             try:
                 raw = await asyncio.wait_for(ws.receive_text(), timeout=300)
                 client_msg = json.loads(raw)
-                if client_msg["type"] == "tool_response":
-                    approved = client_msg.get("approved", False)
-                else:
-                    approved = False
+                approved = client_msg.get("approved", False) if client_msg["type"] == "tool_response" else False
             except (asyncio.TimeoutError, WebSocketDisconnect):
                 approved = False
         else:
             approved = True
 
-        # Execute tool
         if tool_name not in TOOLS:
             result = f"Error: unknown tool '{tool_name}'"
         elif isinstance(approved, str):
