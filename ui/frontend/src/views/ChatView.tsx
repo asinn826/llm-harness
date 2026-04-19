@@ -76,7 +76,6 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
           break;
 
         case "tool_call":
-          // Finalize streaming content as assistant message
           if (streamingRef.current) {
             setMessages((prev) => [
               ...prev,
@@ -111,9 +110,6 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
           break;
 
         case "done": {
-          // Use streaming content if we have it, otherwise use the
-          // response from the server (covers cases where tokens streamed
-          // but were consumed by tool-call parsing on the server side)
           const finalContent = streamingRef.current || ("response" in msg ? msg.response : "") || "";
           if (finalContent) {
             setMessages((prev) => [
@@ -184,19 +180,21 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
     setPendingToolCall(null);
   };
 
+  const hasMessages = messages.length > 0 || isGenerating;
+
   return (
-    <div className="flex flex-col flex-1 min-w-0">
-      {/* Messages area */}
-      <div className="flex-1 overflow-y-auto">
-        {messages.length === 0 && !isGenerating && (
-          <div className="flex items-center justify-center h-full">
-            <div className="text-center">
-              <div className="text-[var(--text-tertiary)] text-sm mb-1">
+    <>
+      {/* Scrollable messages — takes all vertical space above input */}
+      <div style={{ flex: "1 1 0%", overflowY: "auto", width: "100%" }}>
+        {!hasMessages && (
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%" }}>
+            <div style={{ textAlign: "center" }}>
+              <div style={{ color: "var(--text-tertiary)", fontSize: 14, marginBottom: 4 }}>
                 {currentModelId
                   ? `Ready — ${currentModelId.split("/").pop()}`
                   : "Load a model to start"}
               </div>
-              <div className="text-[var(--text-muted)] text-xs">
+              <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
                 {currentModelId
                   ? "Send a message to start a conversation"
                   : "Use the model switcher in the sidebar"}
@@ -205,56 +203,58 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
           </div>
         )}
 
-        <div className="py-4 px-6">
-          {messages.map((msg) => (
-            <ChatMessage
-              key={msg.id}
-              role={msg.role}
-              content={msg.content}
-              modelId={msg.modelId}
-              toolName={msg.toolName}
-              toolArgs={msg.toolArgs}
-              tokensGenerated={msg.tokensGenerated}
-              generationTimeMs={msg.generationTimeMs}
-            />
-          ))}
+        {hasMessages && (
+          <div style={{ padding: "16px 24px" }}>
+            {messages.map((msg) => (
+              <ChatMessage
+                key={msg.id}
+                role={msg.role}
+                content={msg.content}
+                modelId={msg.modelId}
+                toolName={msg.toolName}
+                toolArgs={msg.toolArgs}
+                tokensGenerated={msg.tokensGenerated}
+                generationTimeMs={msg.generationTimeMs}
+              />
+            ))}
 
-          {/* Streaming assistant message */}
-          {streamingContent && (
-            <ChatMessage
-              role="assistant"
-              content={streamingContent}
-              modelId={currentModelId}
-              isStreaming
-            />
-          )}
+            {streamingContent && (
+              <ChatMessage
+                role="assistant"
+                content={streamingContent}
+                modelId={currentModelId}
+                isStreaming
+              />
+            )}
 
-          {/* Tool call approval */}
-          {pendingToolCall && (
-            <ToolCallApproval
-              toolName={pendingToolCall.tool}
-              args={pendingToolCall.args}
-              onApprove={handleToolApprove}
-              onDeny={handleToolDeny}
-            />
-          )}
+            {pendingToolCall && (
+              <ToolCallApproval
+                toolName={pendingToolCall.tool}
+                args={pendingToolCall.args}
+                onApprove={handleToolApprove}
+                onDeny={handleToolDeny}
+              />
+            )}
 
-          <div ref={messagesEndRef} />
-        </div>
+            <div ref={messagesEndRef} />
+          </div>
+        )}
       </div>
 
-      {/* Input */}
-      <ChatInput
-        onSend={handleSend}
-        disabled={isGenerating || wsState !== "open"}
-        placeholder={
-          wsState !== "open"
-            ? "Connecting..."
-            : isGenerating
-              ? "Generating..."
-              : "Message..."
-        }
-      />
-    </div>
+      {/* Input bar — pinned to bottom, full width */}
+      <div style={{ flexShrink: 0, width: "100%" }}>
+        <ChatInput
+          onSend={handleSend}
+          disabled={isGenerating || wsState !== "open"}
+          placeholder={
+            wsState !== "open"
+              ? "Connecting..."
+              : isGenerating
+                ? "Generating..."
+                : "Message..."
+          }
+        />
+      </div>
+    </>
   );
 }
