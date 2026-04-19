@@ -178,7 +178,13 @@ class ModelManager:
 
         token = os.environ.get("HF_TOKEN") or None
 
-        # Patch HF's tqdm to report progress via callback
+        # Check if model is already cached locally
+        from huggingface_hub import try_to_load_from_cache
+        is_cached = try_to_load_from_cache(model_id, "config.json") is not None
+
+        # Patch HF's tqdm to report progress via callback.
+        # HF uses tqdm for both downloading AND loading checkpoint shards —
+        # we use is_cached to show the right message.
         _hf_tqdm_module = importlib.import_module('huggingface_hub.utils.tqdm')
         _orig_hf_tqdm = _hf_tqdm_module.tqdm
 
@@ -191,10 +197,16 @@ class ModelManager:
                 super().update(n)
                 if self.total and progress_callback:
                     pct = self.n / self.total
-                    desc = getattr(self, 'desc', None) or model_id
+                    desc = getattr(self, 'desc', None) or ''
+                    # "Loading checkpoint shards" = loading from disk
+                    # Anything else with a known cache = also loading from disk
+                    if 'shard' in desc.lower() or is_cached:
+                        label = f"Loading weights — {pct:.0%}"
+                    else:
+                        label = f"Downloading — {pct:.0%}"
                     progress_callback(LoadProgress(
-                        model_id=model_id, progress=pct,
-                        status="loading", message=f"Downloading {desc}",
+                        model_id=model_id, progress=0.3 + pct * 0.6,
+                        status="loading", message=label,
                     ))
 
         _hf_tqdm_module.tqdm = _ProgressTqdm
@@ -207,8 +219,9 @@ class ModelManager:
         try:
             if progress_callback:
                 progress_callback(LoadProgress(
-                    model_id=model_id, progress=0.1,
-                    status="loading", message="Loading tokenizer...",
+                    model_id=model_id, progress=0.05,
+                    status="loading",
+                    message="Loading from cache..." if is_cached else "Downloading model...",
                 ))
 
             processor = AutoProcessor.from_pretrained(model_id, token=token)
@@ -216,7 +229,8 @@ class ModelManager:
             if progress_callback:
                 progress_callback(LoadProgress(
                     model_id=model_id, progress=0.3,
-                    status="loading", message="Loading model weights...",
+                    status="loading",
+                    message="Loading weights..." if is_cached else "Downloading weights...",
                 ))
 
             device = "mps" if torch.backends.mps.is_available() else "cpu"
