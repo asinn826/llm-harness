@@ -20,6 +20,8 @@ DIM='\033[2m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
+PIDS=()
+
 check_rust() {
     if ! command -v cargo &>/dev/null; then
         echo -e "${RED}Rust not found.${RESET} Tauri requires Rust to build the native window."
@@ -33,27 +35,30 @@ check_rust() {
 
 start_backend() {
     echo -e "${GREEN}Starting backend...${RESET} ${DIM}:8000${RESET}"
-    python3.11 -m uvicorn ui.backend.server:app \
+    # Use --no-access-log to reduce noise, PYTHONWARNINGS to suppress semaphore leak
+    PYTHONWARNINGS="ignore::UserWarning" python3.11 -m uvicorn ui.backend.server:app \
         --host 127.0.0.1 \
         --port 8000 \
         --reload \
         --reload-dir ui/backend \
         --reload-dir harness.py \
         --reload-dir tools.py \
-        --reload-dir memory.py &
-    BACKEND_PID=$!
+        --reload-dir memory.py \
+        --no-access-log \
+        2>&1 &
+    PIDS+=($!)
 }
 
 cleanup() {
     echo -e "\n${DIM}Shutting down...${RESET}"
-    # Kill process groups so child processes (uvicorn reloader, cargo) die too
-    for pid in $BACKEND_PID $TAURI_PID $FRONTEND_PID; do
-        [ -n "$pid" ] && kill -TERM -- -$pid 2>/dev/null || kill -TERM $pid 2>/dev/null
-    done
-    # Short grace period, then force kill stragglers
-    sleep 0.5
-    for pid in $BACKEND_PID $TAURI_PID $FRONTEND_PID; do
-        [ -n "$pid" ] && kill -9 -- -$pid 2>/dev/null || kill -9 $pid 2>/dev/null
+    # Kill all child processes of this script
+    pkill -P $$ 2>/dev/null
+    sleep 0.3
+    # Force kill anything still alive
+    pkill -9 -P $$ 2>/dev/null
+    # Also kill by stored PIDs in case pkill missed them
+    for pid in "${PIDS[@]}"; do
+        kill -9 "$pid" 2>/dev/null
     done
     wait 2>/dev/null
     echo -e "${DIM}Done.${RESET}"
@@ -64,7 +69,7 @@ trap cleanup EXIT INT TERM
 case "${1:-}" in
     --backend)
         start_backend
-        wait $BACKEND_PID
+        wait
         ;;
     --browser)
         echo -e "${DIM}Browser mode — no native window${RESET}"
@@ -73,7 +78,7 @@ case "${1:-}" in
         echo -e "${GREEN}Starting frontend...${RESET}"
         cd "$PROJECT_ROOT/ui/frontend"
         npx vite --host 127.0.0.1 --open &
-        FRONTEND_PID=$!
+        PIDS+=($!)
         cd "$PROJECT_ROOT"
         echo -e "\n${GREEN}Ready.${RESET}"
         echo -e "${DIM}Press Ctrl+C to stop.${RESET}\n"
@@ -86,7 +91,7 @@ case "${1:-}" in
         echo -e "${GREEN}Launching desktop app...${RESET}"
         cd "$PROJECT_ROOT/ui/frontend"
         npx tauri dev &
-        TAURI_PID=$!
+        PIDS+=($!)
         cd "$PROJECT_ROOT"
         echo -e "\n${GREEN}Ready.${RESET} Native window should open shortly."
         echo -e "${DIM}Press Ctrl+C to stop.${RESET}\n"
