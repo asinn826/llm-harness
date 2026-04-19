@@ -5,6 +5,7 @@ Run with: uvicorn ui.backend.server:app --reload
 """
 import asyncio
 import json
+import re
 import time
 from pathlib import Path
 from typing import Optional
@@ -30,6 +31,11 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+def _strip_think_tags(text: str) -> str:
+    """Remove <think>...</think> blocks from model output."""
+    return re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
 
 
 # ── Models endpoints ───────────────────────────────────────────────────────
@@ -291,15 +297,45 @@ async def _handle_chat_message(ws: WebSocket, msg: dict):
         gen_thread = threading.Thread(target=_generate_thread, daemon=True)
         gen_thread.start()
 
-        # Stream tokens to the client until we get the sentinel
+        # Stream tokens to the client, buffering until any <think> block closes.
+        # Models like Qwen emit <think>...</think> before the real response.
+        think_buffer = ""
+        in_think = False
         while True:
             token = await token_queue.get()
             if token is None:
                 break
-            try:
-                await ws.send_json({"type": "token", "data": token})
-            except Exception:
-                break
+            think_buffer += token
+            # Detect <think> opening
+            if not in_think and "<think>" in think_buffer:
+                # Send anything before the tag
+                before = think_buffer[:think_buffer.index("<think>")]
+                if before.strip():
+                    try:
+                        await ws.send_json({"type": "token", "data": before})
+                    except Exception:
+                        break
+                in_think = True
+                think_buffer = think_buffer[think_buffer.index("<think>"):]
+            if in_think:
+                # Wait for closing tag
+                if "</think>" in think_buffer:
+                    after = think_buffer[think_buffer.index("</think>") + len("</think>"):]
+                    in_think = False
+                    think_buffer = ""
+                    if after.strip():
+                        try:
+                            await ws.send_json({"type": "token", "data": after.lstrip()})
+                        except Exception:
+                            break
+                # Still inside think block — don't send anything
+            else:
+                # No think tags — send token directly
+                try:
+                    await ws.send_json({"type": "token", "data": token})
+                except Exception:
+                    break
+                think_buffer = ""
 
         gen_thread.join(timeout=10)
 
@@ -309,7 +345,7 @@ async def _handle_chat_message(ws: WebSocket, msg: dict):
             return
 
         elapsed_ms = int((time.time() - start_time) * 1000)
-        response = ''.join(chunks).strip()
+        response = _strip_think_tags(''.join(chunks).strip())
         token_count = len(chunks)
 
         if not response:
@@ -510,7 +546,7 @@ async def _handle_compare_message(ws: WebSocket, msg: dict):
             gen_thread.join(timeout=5)
 
             elapsed_ms = int((time.time() - start_time) * 1000)
-            response = ''.join(chunks).strip()
+            response = _strip_think_tags(''.join(chunks).strip())
             token_count = len(chunks)
 
             tool_call = parse_tool_call(response)
