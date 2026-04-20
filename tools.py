@@ -25,7 +25,7 @@ import time
 from collections import defaultdict
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Callable, TypeVar
+from typing import Callable, Optional, TypeVar
 import html2text
 import requests
 
@@ -917,6 +917,14 @@ return thePhone
         digits = '1' + digits
     e164 = '+' + digits
 
+    # Step 1b: if no area_code/label filter was used and the contact has
+    # multiple phones, try to pick the one with an active chat.db handle
+    # (i.e., a number you've actually messaged before).
+    if not area_code and not label:
+        better = _pick_active_phone(contact, e164)
+        if better:
+            e164 = better
+
     # Step 2: determine the right messaging service for this number.
     # A contact may have multiple handles (e.g. an iMessage email handle AND
     # an RCS/SMS phone handle). Prefer iMessage if any handle uses it.
@@ -971,6 +979,87 @@ def _build_phone_selection(contact: str, area_code: str, label: str) -> str:
         end if
     end repeat
     if thePhone is "" then error "No phone number matching {filter_desc} found for \\"{contact}\\""'''
+
+
+def _pick_active_phone(contact: str, default_e164: str) -> Optional[str]:
+    """If a contact has multiple phones, pick the one with chat history.
+
+    Fetches all phone numbers from Contacts, cross-references against
+    chat.db handles, and returns the E.164 number that has the most
+    recent conversation. Returns None if no better match is found.
+    """
+    # Get all phone numbers for this contact
+    all_phones_script = f'''
+tell application "Contacts"
+    set matchingPeople to (every person whose name contains "{contact}")
+    if (count of matchingPeople) is 0 then return ""
+    set thePerson to item 1 of matchingPeople
+    set phoneList to {{}}
+    repeat with p in phones of thePerson
+        set end of phoneList to (value of p) as text
+    end repeat
+    set AppleScript's text item delimiters to ","
+    return phoneList as text
+end tell
+'''
+    try:
+        result = subprocess.run(["osascript", "-e", all_phones_script],
+                                capture_output=True, text=True, timeout=10)
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+    except Exception:
+        return None
+
+    raw_phones = [p.strip() for p in result.stdout.strip().split(",") if p.strip()]
+    if len(raw_phones) <= 1:
+        return None  # only one number, nothing to choose
+
+    # Normalize all to E.164
+    e164_phones = []
+    for raw in raw_phones:
+        digits = ''.join(c for c in raw if c.isdigit())
+        if len(digits) == 10:
+            digits = '1' + digits
+        e164_phones.append('+' + digits)
+
+    # Check chat.db for which numbers have active handles
+    db_path = os.path.expanduser("~/Library/Messages/chat.db")
+    if not os.access(db_path, os.R_OK):
+        return None
+
+    try:
+        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        cur = conn.cursor()
+        # Find handles that match any of the contact's phone numbers,
+        # ordered by most recent message
+        cur.execute("""
+            SELECT h.id, MAX(m.date) as last_msg
+            FROM handle h
+            JOIN chat_handle_join chj ON chj.handle_id = h.ROWID
+            JOIN chat_message_join cmj ON cmj.chat_id = chj.chat_id
+            JOIN message m ON m.ROWID = cmj.message_id
+            GROUP BY h.id
+            ORDER BY last_msg DESC
+        """)
+        handle_recency = {}
+        for hid, last_msg in cur.fetchall():
+            handle_recency[_last10(hid)] = last_msg
+        conn.close()
+    except Exception:
+        return None
+
+    # Pick the phone number with the most recent chat activity
+    best = None
+    best_recency = -1
+    for e164 in e164_phones:
+        last10 = _last10(e164)
+        if last10 in handle_recency and handle_recency[last10] > best_recency:
+            best = e164
+            best_recency = handle_recency[last10]
+
+    if best and best != default_e164:
+        return best
+    return None
 
 
 def _detect_service(e164: str) -> str:
