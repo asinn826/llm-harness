@@ -297,49 +297,48 @@ async def _handle_chat_message(ws: WebSocket, msg: dict):
         gen_thread = threading.Thread(target=_generate_thread, daemon=True)
         gen_thread.start()
 
-        # Stream tokens to the client, buffering until any <think> block closes.
-        # Models like Qwen emit <think>...</think> before the real response.
-        think_buffer = ""
-        in_think = False
+        # Collect all tokens first, then strip think tags and decide
+        # what to send. Streaming token-by-token with think filtering
+        # is fragile (token boundaries split tags). Instead we buffer
+        # the full response, clean it, then send it in one shot.
+        # For long responses we still stream — just with a think-block delay.
+        full_text = ""
+        think_done = False
         while True:
             token = await token_queue.get()
             if token is None:
                 break
-            think_buffer += token
-            # Detect <think> opening
-            if not in_think and "<think>" in think_buffer:
-                # Send anything before the tag
-                before = think_buffer[:think_buffer.index("<think>")]
-                if before.strip():
+            full_text += token
+            # Once the think block closes (or if there's no think block),
+            # start streaming the cleaned content to the client.
+            if not think_done:
+                if "<think>" not in full_text:
+                    # No think block — stream directly
+                    think_done = True
                     try:
-                        await ws.send_json({"type": "token", "data": before})
+                        await ws.send_json({"type": "token", "data": full_text})
                     except Exception:
                         break
-                in_think = True
-                think_buffer = think_buffer[think_buffer.index("<think>"):]
-            if in_think:
-                # Wait for closing tag
-                if "</think>" in think_buffer:
-                    after = think_buffer[think_buffer.index("</think>") + len("</think>"):]
-                    in_think = False
-                    think_buffer = ""
-                    if after.strip():
+                elif "</think>" in full_text:
+                    # Think block just closed — send everything after it
+                    think_done = True
+                    after = full_text[full_text.index("</think>") + len("</think>"):]
+                    cleaned = after.lstrip()
+                    if cleaned:
                         try:
-                            await ws.send_json({"type": "token", "data": after.lstrip()})
+                            await ws.send_json({"type": "token", "data": cleaned})
                         except Exception:
                             break
-                # Still inside think block — don't send anything
+                # else: still inside think block, keep buffering
             else:
-                # No think tags — send token directly
+                # Past the think block — stream normally
                 try:
                     await ws.send_json({"type": "token", "data": token})
                 except Exception:
                     break
-                think_buffer = ""
 
         gen_thread.join(timeout=10)
 
-        # Check for generation errors
         if error_box:
             await ws.send_json({"type": "error", "message": str(error_box[0])})
             return
@@ -355,7 +354,6 @@ async def _handle_chat_message(ws: WebSocket, msg: dict):
         tool_call = parse_tool_call(response)
 
         if tool_call is None:
-            # Plain text response — done
             conversation.append({"role": "assistant", "content": response})
             add_message(session_id, "assistant", response,
                        model_id=current.model_id,
