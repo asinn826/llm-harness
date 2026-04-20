@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import { ChevronDown, ChevronRight, Terminal, AlertCircle } from "lucide-react";
 import { getModelColor } from "../lib/types";
@@ -232,6 +232,24 @@ export function ToolCallApproval({
   onApprove: () => void;
   onDeny: () => void;
 }) {
+  // Auto-focus approve button so Enter works immediately
+  const approveRef = useRef<HTMLButtonElement>(null);
+  useState(() => {
+    setTimeout(() => approveRef.current?.focus(), 50);
+  });
+
+  // Global Enter key handler
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        onApprove();
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [onApprove]);
+
   return (
     <div className="px-5 py-2">
       <div className="rounded-md border border-[var(--warning)]/30 bg-[var(--warning-muted)] p-3">
@@ -245,8 +263,9 @@ export function ToolCallApproval({
         <pre className="text-xs text-[var(--text-secondary)] font-[var(--font-mono)] mb-3 overflow-x-auto">
           {JSON.stringify(args, null, 2)}
         </pre>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2">
           <button
+            ref={approveRef}
             onClick={onApprove}
             className="px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] transition-colors duration-[var(--duration-fast)]"
           >
@@ -258,6 +277,9 @@ export function ToolCallApproval({
           >
             Deny
           </button>
+          <span className="text-[10px] text-[var(--text-muted)] ml-1">
+            press Enter to approve
+          </span>
         </div>
       </div>
     </div>

@@ -114,10 +114,13 @@ body {
 .send-btn-active {
   background: var(--accent);
   color: white;
-  transition: background 120ms ease-out;
+  transition: background 60ms ease-out;
 }
 .send-btn-active:hover {
   background: var(--accent-hover);
+}
+.send-btn-active:active {
+  background: var(--accent);
 }
 
 /* ── Thinking indicator: 3 dots with staggered wave ────────────── */
