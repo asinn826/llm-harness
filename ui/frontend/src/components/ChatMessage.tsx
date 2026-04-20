@@ -3,9 +3,29 @@ import ReactMarkdown from "react-markdown";
 import { ChevronDown, ChevronRight, Terminal, AlertCircle } from "lucide-react";
 import { getModelColor } from "../lib/types";
 
-/** Strip <think>...</think> blocks from model output (client-side safety net). */
+/** Strip think blocks from model output (client-side safety net).
+ *  Handles three cases:
+ *  1. Full block: <think>...</think>
+ *  2. Missing opening tag (server stripped it): everything up to </think>
+ *  3. Unclosed block (still streaming): <think>... with no closing tag
+ */
 function stripThink(text: string): string {
-  return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
+  // Full <think>...</think> blocks
+  let cleaned = text.replace(/<think>[\s\S]*?<\/think>\s*/g, "");
+  // Missing opening tag — strip everything before and including </think>
+  cleaned = cleaned.replace(/^[\s\S]*?<\/think>\s*/g, "");
+  // Unclosed <think> block (streaming, no closing tag yet)
+  cleaned = cleaned.replace(/<think>[\s\S]*$/, "");
+  return cleaned.trim();
+}
+
+/** Fix markdown tables that are all on one line.
+ *  Models sometimes output: | A | B | | --- | --- | | 1 | 2 |
+ *  ReactMarkdown needs each row on its own line.
+ */
+function fixMarkdownTables(text: string): string {
+  // Match sequences of | ... | that look like table rows
+  return text.replace(/(\|[^|\n]+\|)\s*(?=\|)/g, "$1\n");
 }
 
 interface ChatMessageProps {
@@ -46,8 +66,8 @@ export function ChatMessage({
     );
   }
 
-  // Assistant — strip any leaked think tags
-  const displayContent = stripThink(content);
+  // Assistant — strip leaked think tags and fix table formatting
+  const displayContent = fixMarkdownTables(stripThink(content));
   const modelColor = modelId ? getModelColor(modelId) : "var(--text-muted)";
   const modelDisplay = modelId?.split("/").pop() || "Assistant";
 
