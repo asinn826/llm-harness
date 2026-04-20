@@ -485,9 +485,13 @@ def _trim_stale_tool_results(conversation: list, keep_recent: int = 2):
     that preserves the tool name and key content (event titles, sender
     names, etc.) without using the model.
     """
-    # Count user messages from the end to find the cutoff
+    # Count user messages from the end to find the cutoff.
+    # Default to 0 (trim nothing) — only trim once we have enough
+    # conversation history. The old default of len(conversation)
+    # would trim the CURRENT turn's tool results when there were
+    # fewer than keep_recent user messages.
     user_count = 0
-    cutoff_idx = len(conversation)
+    cutoff_idx = 0
     for i in range(len(conversation) - 1, -1, -1):
         if conversation[i]["role"] == "user":
             user_count += 1
