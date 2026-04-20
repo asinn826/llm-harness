@@ -64,14 +64,14 @@ export type WSClientMessage =
 /** Model color assignment — persistent across the app */
 export const MODEL_COLORS: Record<string, string> = {};
 const COLOR_PALETTE = [
-  "#7c6fef", // violet
-  "#4ade80", // green
-  "#f97316", // orange
-  "#06b6d4", // cyan
-  "#ec4899", // pink
-  "#eab308", // yellow
-  "#8b5cf6", // purple
-  "#14b8a6", // teal
+  "#5088f7", // blue (matches accent)
+  "#3ecf71", // green
+  "#e5a820", // amber
+  "#c9555a", // red
+  "#2aadad", // teal
+  "#b07ce0", // lavender
+  "#e08c4a", // orange
+  "#6ba3a3", // sage
 ];
 let _colorIndex = 0;
 
