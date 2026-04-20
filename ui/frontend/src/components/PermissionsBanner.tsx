@@ -10,6 +10,10 @@ export function PermissionsBanner({ onRetry }: PermissionsBannerProps) {
 
   if (dismissed) return null;
 
+  const openSettings = () => {
+    fetch("/api/permissions/open-settings", { method: "POST" });
+  };
+
   return (
     <div
       style={{
@@ -24,12 +28,24 @@ export function PermissionsBanner({ onRetry }: PermissionsBannerProps) {
       }}
     >
       <span style={{ color: "var(--text-primary)", flex: 1 }}>
-        macOS needs permission to send messages and access contacts.{" "}
-        <span style={{ color: "var(--text-secondary)" }}>
-          A system dialog may have appeared behind this window — check your other windows or go to
-          System Settings &gt; Privacy &amp; Security &gt; Automation.
-        </span>
+        Grant access to Messages and Contacts to send texts and read your calendar.
       </span>
+      <button
+        onClick={openSettings}
+        style={{
+          padding: "4px 10px",
+          background: "var(--accent)",
+          border: "none",
+          borderRadius: 4,
+          color: "white",
+          fontSize: 11,
+          fontWeight: 500,
+          cursor: "pointer",
+          flexShrink: 0,
+        }}
+      >
+        Open Settings
+      </button>
       <button
         onClick={onRetry}
         style={{

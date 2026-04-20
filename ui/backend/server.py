@@ -820,17 +820,22 @@ def _check_automation(app_name: str) -> bool:
 
 @app.get("/permissions")
 async def check_permissions():
-    """Check macOS Automation permissions for Messages and Contacts.
-
-    Returns which apps are authorized. Calling this endpoint triggers
-    the macOS permission dialog if permission hasn't been granted yet.
-    """
+    """Check macOS Automation permissions for Messages and Contacts."""
     if _platform.system() != "Darwin":
         return {"messages": True, "contacts": True}
 
     messages = await asyncio.to_thread(_check_automation, "Messages")
     contacts = await asyncio.to_thread(_check_automation, "Contacts")
     return {"messages": messages, "contacts": contacts}
+
+
+@app.post("/permissions/open-settings")
+async def open_automation_settings():
+    """Open macOS System Settings to the Automation privacy pane."""
+    if _platform.system() != "Darwin":
+        return {"status": "not_macos"}
+    _sp.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"])
+    return {"status": "ok"}
 
 
 # ── Health check ──────────────────────────────────────────────────────────
