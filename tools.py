@@ -1030,16 +1030,18 @@ end tell
     try:
         conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
         cur = conn.cursor()
-        # Find handles that match any of the contact's phone numbers,
-        # ordered by most recent message
+        # Find handles with the most recent INCOMING message (is_from_me=0).
+        # Incoming messages prove the number is currently active — outgoing
+        # messages may have been sent to a stale number that no longer delivers.
         cur.execute("""
-            SELECT h.id, MAX(m.date) as last_msg
+            SELECT h.id, MAX(m.date) as last_incoming
             FROM handle h
             JOIN chat_handle_join chj ON chj.handle_id = h.ROWID
             JOIN chat_message_join cmj ON cmj.chat_id = chj.chat_id
             JOIN message m ON m.ROWID = cmj.message_id
+            WHERE m.is_from_me = 0
             GROUP BY h.id
-            ORDER BY last_msg DESC
+            ORDER BY last_incoming DESC
         """)
         handle_recency = {}
         for hid, last_msg in cur.fetchall():
@@ -1048,7 +1050,7 @@ end tell
     except Exception:
         return None
 
-    # Pick the phone number with the most recent chat activity
+    # Pick the phone number with the most recent incoming message
     best = None
     best_recency = -1
     for e164 in e164_phones:
