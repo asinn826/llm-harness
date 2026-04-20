@@ -50,6 +50,7 @@ export type WSServerMessage =
   | { type: "done"; response: string; tokens?: number; time_ms?: number; session_id?: string }
   | { type: "session_created"; session_id: string; title?: string }
   | { type: "error"; message: string }
+  | { type: "title_updated"; session_id: string; title: string }
   // Compare-specific
   | { type: "model_start"; model_id: string; index: number }
   | { type: "model_done"; model_id: string; index: number; response: string; tokens: number; time_ms: number }

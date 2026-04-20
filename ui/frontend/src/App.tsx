@@ -13,6 +13,8 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [currentModelId, setCurrentModelId] = useState<string | null>(null);
   const [currentBackend, setCurrentBackend] = useState<string | null>(null);
+  // Bumped to trigger sidebar session list refresh
+  const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
 
   const handleModelLoaded = useCallback((modelId: string, backend: string) => {
     setCurrentModelId(modelId);
@@ -31,6 +33,11 @@ export default function App() {
 
   const handleSessionCreated = useCallback((id: string) => {
     setActiveSessionId(id);
+    setSessionRefreshKey((k) => k + 1);
+  }, []);
+
+  const handleTitleUpdated = useCallback((_sessionId: string, _title: string) => {
+    setSessionRefreshKey((k) => k + 1);
   }, []);
 
   const handleResumeSession = useCallback((id: string) => {
@@ -48,6 +55,7 @@ export default function App() {
         onNewSession={handleNewSession}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+        refreshKey={sessionRefreshKey}
         modelSwitcher={
           <ModelSwitcher
             onModelLoaded={handleModelLoaded}
@@ -61,6 +69,7 @@ export default function App() {
           <ChatView
             sessionId={activeSessionId}
             onSessionCreated={handleSessionCreated}
+            onTitleUpdated={handleTitleUpdated}
             currentModelId={currentModelId}
           />
         )}

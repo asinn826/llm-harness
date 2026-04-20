@@ -25,10 +25,11 @@ interface PendingToolCall {
 interface ChatViewProps {
   sessionId: string | null;
   onSessionCreated: (id: string) => void;
+  onTitleUpdated?: (sessionId: string, title: string) => void;
   currentModelId: string | null;
 }
 
-export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatViewProps) {
+export function ChatView({ sessionId, onSessionCreated, onTitleUpdated, currentModelId }: ChatViewProps) {
   const [messages, setMessages] = useState<DisplayMessage[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [pendingToolCall, setPendingToolCall] = useState<PendingToolCall | null>(null);
@@ -68,6 +69,10 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
       switch (msg.type) {
         case "session_created":
           onSessionCreated(msg.session_id);
+          break;
+
+        case "title_updated":
+          onTitleUpdated?.(msg.session_id, msg.title);
           break;
 
         case "token":
@@ -145,7 +150,7 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
           break;
       }
     },
-    [onSessionCreated, currentModelId]
+    [onSessionCreated, onTitleUpdated, currentModelId]
   );
 
   const { send, state: wsState } = useWebSocket({

@@ -38,6 +38,64 @@ def _strip_think_tags(text: str) -> str:
     return re.sub(r'<think>.*?</think>\s*', '', text, flags=re.DOTALL).strip()
 
 
+async def _generate_session_title(session_id: str, user_message: str, ws: WebSocket):
+    """Generate a short title for a session using the loaded model, in the background.
+
+    Sends a title_updated WebSocket message when done. Falls back to
+    truncating the user message if generation fails.
+    """
+    try:
+        prompt_messages = [
+            {"role": "user", "content": (
+                f"Summarize this request in 4-6 words as a short title. "
+                f"Reply with ONLY the title, nothing else. No quotes, no punctuation at the end.\n\n"
+                f"\"{user_message}\""
+            )},
+        ]
+
+        def _gen():
+            chunks = []
+            for token in model_manager.generate(prompt_messages):
+                chunks.append(token)
+            return ''.join(chunks).strip()
+
+        raw_title = await asyncio.to_thread(_gen)
+        title = _strip_think_tags(raw_title)
+
+        # Clean up: remove quotes, trailing punctuation, limit length
+        title = title.strip('"\'').strip('.!').strip()
+        if not title or len(title) < 2:
+            title = user_message[:50]
+
+        # Cap at reasonable length
+        if len(title) > 60:
+            title = title[:57] + "..."
+
+        update_session_title(session_id, title)
+
+        try:
+            await ws.send_json({
+                "type": "title_updated",
+                "session_id": session_id,
+                "title": title,
+            })
+        except Exception:
+            pass  # WebSocket might be closed
+
+    except Exception:
+        # Fallback: use truncated first message
+        fallback = user_message[:50] + ("..." if len(user_message) > 50 else "")
+        update_session_title(session_id, fallback)
+        try:
+            await ws.send_json({
+                "type": "title_updated",
+                "session_id": session_id,
+                "title": fallback,
+            })
+        except Exception:
+            pass
+
+
 # ── Models endpoints ───────────────────────────────────────────────────────
 
 class LoadModelRequest(BaseModel):
@@ -267,6 +325,7 @@ async def _handle_chat_message(ws: WebSocket, msg: dict):
 
     # Get conversation history
     conversation = get_conversation_list(session_id)
+    is_first_turn = len(conversation) == 0
 
     # Store user message
     add_message(session_id, "user", content)
@@ -384,6 +443,11 @@ async def _handle_chat_message(ws: WebSocket, msg: dict):
                 "time_ms": elapsed_ms,
                 "session_id": session_id,
             })
+
+            # Generate a descriptive title after the first completed turn
+            if is_first_turn:
+                await _generate_session_title(session_id, content, ws)
+
             return
 
         # Tool call

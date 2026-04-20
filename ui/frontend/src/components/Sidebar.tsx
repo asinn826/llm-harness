@@ -23,6 +23,8 @@ interface SidebarProps {
   collapsed: boolean;
   onToggleCollapse: () => void;
   modelSwitcher?: ReactNode;
+  /** Bump to trigger session list refresh */
+  refreshKey?: number;
 }
 
 const NAV_ITEMS: { view: View; icon: typeof MessageSquare; label: string }[] = [
@@ -40,12 +42,13 @@ export function Sidebar({
   collapsed,
   onToggleCollapse,
   modelSwitcher,
+  refreshKey,
 }: SidebarProps) {
   const [recentSessions, setRecentSessions] = useState<Session[]>([]);
 
   useEffect(() => {
     sessionsApi.list(20).then(setRecentSessions).catch(() => {});
-  }, [activeSessionId]);
+  }, [activeSessionId, refreshKey]);
 
   return (
     <div
