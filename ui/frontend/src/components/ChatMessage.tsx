@@ -3,6 +3,11 @@ import ReactMarkdown from "react-markdown";
 import { ChevronDown, ChevronRight, Terminal, AlertCircle } from "lucide-react";
 import { getModelColor } from "../lib/types";
 
+/** Strip <think>...</think> blocks from model output (client-side safety net). */
+function stripThink(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>\s*/g, "").trim();
+}
+
 interface ChatMessageProps {
   role: "user" | "assistant" | "tool";
   content: string;
@@ -41,7 +46,8 @@ export function ChatMessage({
     );
   }
 
-  // Assistant
+  // Assistant — strip any leaked think tags
+  const displayContent = stripThink(content);
   const modelColor = modelId ? getModelColor(modelId) : "var(--text-muted)";
   const modelDisplay = modelId?.split("/").pop() || "Assistant";
 
@@ -59,7 +65,7 @@ export function ChatMessage({
         )}
       </div>
       <div className="text-[var(--text-primary)] text-sm leading-relaxed prose prose-invert prose-sm max-w-none">
-        {content ? (
+        {displayContent ? (
           <>
             <ReactMarkdown
               components={{
@@ -80,9 +86,25 @@ export function ChatMessage({
                     </pre>
                   );
                 },
+                table: ({ children }) => (
+                  <div className="overflow-x-auto my-2">
+                    <table className="text-xs border-collapse w-full">
+                      {children}
+                    </table>
+                  </div>
+                ),
+                thead: ({ children }) => (
+                  <thead className="border-b border-[var(--border-default)]">{children}</thead>
+                ),
+                th: ({ children }) => (
+                  <th className="text-left px-3 py-1.5 text-[var(--text-secondary)] font-medium">{children}</th>
+                ),
+                td: ({ children }) => (
+                  <td className="px-3 py-1.5 text-[var(--text-primary)] border-b border-[var(--border-subtle)]">{children}</td>
+                ),
               }}
             >
-              {content}
+              {displayContent}
             </ReactMarkdown>
             {isStreaming && (
               <span
@@ -94,7 +116,9 @@ export function ChatMessage({
               />
             )}
           </>
-        ) : isStreaming ? (
+        ) : isStreaming || (!displayContent && content) ? (
+          /* Show thinking dots when: streaming with no content yet,
+             OR content exists but is all inside a think block (stripped to empty) */
           <div className="thinking-dots">
             <span style={{ background: modelColor }} />
             <span style={{ background: modelColor }} />
