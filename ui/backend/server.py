@@ -272,11 +272,24 @@ async def _handle_chat_message(ws: WebSocket, msg: dict):
     add_message(session_id, "user", content)
     conversation.append({"role": "user", "content": content})
 
-    for iteration in range(10):
+    max_iterations = 10
+    for iteration in range(max_iterations):
         _trim_stale_tool_results(conversation)
 
-        # Generate with streaming — run generator in a thread,
-        # ferry tokens to the async world via a queue.
+        # Warn the model when it's running low on tool-call iterations
+        # so it gives a best-effort answer instead of burning the rest
+        remaining = max_iterations - iteration
+        if remaining == 3:
+            conversation.append({
+                "role": "user",
+                "content": "[System: You have 3 tool calls remaining. Wrap up with whatever information you have. Do NOT keep searching — summarize what you found and answer the question.]",
+            })
+        elif remaining == 1:
+            conversation.append({
+                "role": "user",
+                "content": "[System: This is your LAST tool call. You MUST respond with a final answer now, not another tool call.]",
+            })
+
         chunks: list[str] = []
         error_box: list[Exception] = []
         start_time = time.time()
@@ -297,43 +310,48 @@ async def _handle_chat_message(ws: WebSocket, msg: dict):
         gen_thread = threading.Thread(target=_generate_thread, daemon=True)
         gen_thread.start()
 
-        # Collect all tokens first, then strip think tags and decide
-        # what to send. Streaming token-by-token with think filtering
-        # is fragile (token boundaries split tags). Instead we buffer
-        # the full response, clean it, then send it in one shot.
-        # For long responses we still stream — just with a think-block delay.
+        # Buffer tokens until we know whether a <think> block is present.
+        # Bug fix: don't decide "no think block" on the first token —
+        # models may emit whitespace before <think>. Wait for 50 chars
+        # or the first non-whitespace content before deciding.
         full_text = ""
         think_done = False
+        sent_count = 0  # chars already sent to client
         while True:
             token = await token_queue.get()
             if token is None:
                 break
             full_text += token
-            # Once the think block closes (or if there's no think block),
-            # start streaming the cleaned content to the client.
+
             if not think_done:
-                if "<think>" not in full_text:
-                    # No think block — stream directly
+                if "<think>" in full_text:
+                    # Think block found — wait for it to close
+                    if "</think>" in full_text:
+                        think_done = True
+                        after = full_text[full_text.index("</think>") + len("</think>"):]
+                        cleaned = after.lstrip()
+                        sent_count = len(full_text) - len(after) + (len(after) - len(cleaned))
+                        if cleaned:
+                            try:
+                                await ws.send_json({"type": "token", "data": cleaned})
+                                sent_count = len(full_text)
+                            except Exception:
+                                break
+                    # else: still inside think block, keep buffering
+                elif len(full_text.strip()) > 30:
+                    # Enough non-whitespace content without <think> — no think block
                     think_done = True
                     try:
                         await ws.send_json({"type": "token", "data": full_text})
+                        sent_count = len(full_text)
                     except Exception:
                         break
-                elif "</think>" in full_text:
-                    # Think block just closed — send everything after it
-                    think_done = True
-                    after = full_text[full_text.index("</think>") + len("</think>"):]
-                    cleaned = after.lstrip()
-                    if cleaned:
-                        try:
-                            await ws.send_json({"type": "token", "data": cleaned})
-                        except Exception:
-                            break
-                # else: still inside think block, keep buffering
+                # else: not enough content yet to decide, keep buffering
             else:
                 # Past the think block — stream normally
                 try:
                     await ws.send_json({"type": "token", "data": token})
+                    sent_count = len(full_text)
                 except Exception:
                     break
 

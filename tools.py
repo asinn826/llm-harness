@@ -178,6 +178,63 @@ def web_search(query: str) -> str:
         return f"Error: {e}"
 
 
+@permission(Permission.READ_ONLY)
+def web_search_and_read(query: str) -> str:
+    """Search the web and return the full content of the most relevant result. Combines web_search + fetch_url in one step — use this instead of calling them separately. Args: query (str). Returns: the full page content of the top result (up to 8000 chars), or search snippets if the page can't be fetched."""
+    api_key = os.environ.get("TAVILY_API_KEY")
+    if not api_key:
+        return "Error: TAVILY_API_KEY environment variable not set"
+    try:
+        resp = requests.post(
+            "https://api.tavily.com/search",
+            json={"api_key": api_key, "query": query, "max_results": 3},
+            timeout=10,
+        )
+        data = resp.json()
+        results = data.get("results", [])
+        if not results:
+            return "No results found."
+
+        # Try to fetch the top result's full page
+        for r in results:
+            url = r.get("url", "")
+            if not url:
+                continue
+            try:
+                page_resp = requests.get(url, timeout=10, headers={"User-Agent": "Mozilla/5.0"})
+                page_resp.raise_for_status()
+                text = None
+                try:
+                    import trafilatura
+                    text = trafilatura.extract(page_resp.text, include_comments=False,
+                                               include_tables=True, favor_recall=True)
+                except ImportError:
+                    pass
+                if not text or len(text.strip()) < 50:
+                    h = html2text.HTML2Text()
+                    h.ignore_links = True
+                    h.ignore_images = True
+                    text = h.handle(page_resp.text).strip()
+                if text and len(text.strip()) > 50:
+                    header = f"Source: {r['title']}\nURL: {url}\n\n"
+                    content = text[:8000]
+                    return header + content
+            except Exception:
+                continue
+
+        # Fallback: return search snippets if no page could be fetched
+        import re
+        snippets = []
+        for i, r in enumerate(results, 1):
+            content = r.get("content", "")
+            content = re.sub(r'!?\[([^\]]*)\]\([^)]*\)', r'\1', content)
+            content = ' '.join(content.split())
+            snippets.append(f"{i}. {r['title']}\n   {r.get('url', '')}\n   {content}")
+        return "Could not fetch full pages. Search snippets:\n\n" + "\n\n".join(snippets)
+    except Exception as e:
+        return f"Error: {e}"
+
+
 _WEATHER_CODES = {
     0: "Clear sky", 1: "Mainly clear", 2: "Partly cloudy", 3: "Overcast",
     45: "Foggy", 48: "Depositing rime fog",
@@ -1629,6 +1686,7 @@ TOOLS = {
     "calculator": calculator,
     "fetch_url": fetch_url,
     "web_search": web_search,
+    "web_search_and_read": web_search_and_read,
     "get_weather": get_weather,
     "get_forecast": get_forecast,
     "find_gif": find_gif,
