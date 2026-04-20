@@ -1,6 +1,7 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Sidebar } from "./components/Sidebar";
 import { ModelSwitcher } from "./components/ModelSwitcher";
+import { PermissionsBanner } from "./components/PermissionsBanner";
 import { ChatView } from "./views/ChatView";
 import { CompareView } from "./views/CompareView";
 import { SettingsView } from "./views/SettingsView";
@@ -14,6 +15,17 @@ export default function App() {
   const [currentModelId, setCurrentModelId] = useState<string | null>(null);
   const [currentBackend, setCurrentBackend] = useState<string | null>(null);
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
+  const [permissionsOk, setPermissionsOk] = useState(true);
+
+  // Check macOS Automation permissions on startup
+  useEffect(() => {
+    fetch("/api/permissions")
+      .then((r) => r.json())
+      .then((data) => {
+        setPermissionsOk(data.messages && data.contacts);
+      })
+      .catch(() => {});
+  }, []);
 
   const handleModelLoaded = useCallback((modelId: string, backend: string) => {
     setCurrentModelId(modelId);
@@ -39,6 +51,15 @@ export default function App() {
     setSessionRefreshKey((k) => k + 1);
   }, []);
 
+  const handlePermissionsRetry = useCallback(() => {
+    fetch("/api/permissions")
+      .then((r) => r.json())
+      .then((data) => {
+        setPermissionsOk(data.messages && data.contacts);
+      })
+      .catch(() => {});
+  }, []);
+
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "var(--bg-primary)" }}>
       <Sidebar
@@ -59,6 +80,9 @@ export default function App() {
       />
 
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
+        {!permissionsOk && (
+          <PermissionsBanner onRetry={handlePermissionsRetry} />
+        )}
         {currentView === "chat" && (
           <ChatView
             sessionId={activeSessionId}

@@ -793,6 +793,46 @@ async def save_api_key(req: SaveKeyRequest):
     return {"status": "ok"}
 
 
+# ── Permissions check ─────────────────────────────────────────────────────
+
+import subprocess as _sp
+import platform as _platform
+
+
+def _check_automation(app_name: str) -> bool:
+    """Test if this process has macOS Automation permission for an app.
+
+    Runs a harmless osascript command. If macOS blocks it, the command
+    fails with 'not allowed' in stderr. First run triggers the system
+    permission dialog.
+    """
+    if _platform.system() != "Darwin":
+        return True
+    try:
+        r = _sp.run(
+            ["osascript", "-e", f'tell application "{app_name}" to get name'],
+            capture_output=True, text=True, timeout=5,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+@app.get("/permissions")
+async def check_permissions():
+    """Check macOS Automation permissions for Messages and Contacts.
+
+    Returns which apps are authorized. Calling this endpoint triggers
+    the macOS permission dialog if permission hasn't been granted yet.
+    """
+    if _platform.system() != "Darwin":
+        return {"messages": True, "contacts": True}
+
+    messages = await asyncio.to_thread(_check_automation, "Messages")
+    contacts = await asyncio.to_thread(_check_automation, "Contacts")
+    return {"messages": messages, "contacts": contacts}
+
+
 # ── Health check ──────────────────────────────────────────────────────────
 
 @app.get("/health")
