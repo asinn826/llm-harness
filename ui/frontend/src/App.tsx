@@ -3,10 +3,9 @@ import { Sidebar } from "./components/Sidebar";
 import { ModelSwitcher } from "./components/ModelSwitcher";
 import { ChatView } from "./views/ChatView";
 import { CompareView } from "./views/CompareView";
-import { ModelsView } from "./views/ModelsView";
 import { SessionsView } from "./views/SessionsView";
 
-type View = "chat" | "compare" | "models" | "sessions" | "settings";
+type View = "chat" | "compare" | "sessions" | "settings";
 
 export default function App() {
   const [currentView, setCurrentView] = useState<View>("chat");
@@ -39,9 +38,6 @@ export default function App() {
     setCurrentView("chat");
   }, []);
 
-  const isCompactView = currentView === "compare" || currentView === "models";
-  const effectiveCollapsed = isCompactView || sidebarCollapsed;
-
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "var(--bg-primary)" }}>
       <Sidebar
@@ -50,9 +46,14 @@ export default function App() {
         activeSessionId={activeSessionId}
         onSessionSelect={handleSessionSelect}
         onNewSession={handleNewSession}
-        collapsed={effectiveCollapsed}
+        collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
-        modelSwitcher={<ModelSwitcher onModelLoaded={handleModelLoaded} />}
+        modelSwitcher={
+          <ModelSwitcher
+            onModelLoaded={handleModelLoaded}
+            collapsed={sidebarCollapsed}
+          />
+        }
       />
 
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
@@ -64,7 +65,6 @@ export default function App() {
           />
         )}
         {currentView === "compare" && <CompareView />}
-        {currentView === "models" && <ModelsView onModelLoaded={handleModelLoaded} />}
         {currentView === "sessions" && <SessionsView onResumeSession={handleResumeSession} />}
         {currentView === "settings" && (
           <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
