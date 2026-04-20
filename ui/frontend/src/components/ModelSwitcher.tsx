@@ -196,16 +196,19 @@ export function ModelSwitcher({ onModelLoaded, collapsed = false }: ModelSwitche
           ref={triggerRef}
           onClick={() => setIsOpen(!isOpen)}
           className="w-9 h-9 flex items-center justify-center rounded-md hover:bg-[var(--bg-surface)] transition-colors duration-[var(--duration-fast)]"
-          title={currentModel ? currentModel.split("/").pop() : "Select model"}
+          title={loading ? `Loading ${loading.split("/").pop()}...` : currentModel ? currentModel.split("/").pop() : "Select model"}
         >
-          {loading ? (
-            <Loader2 size={16} className="text-[var(--accent)] animate-spin" />
-          ) : (
-            <div
-              className="w-3 h-3 rounded-full"
-              style={{ background: modelColor }}
-            />
-          )}
+          <div
+            className={loading ? "model-dot-loading" : ""}
+            style={{
+              width: 12,
+              height: 12,
+              borderRadius: "50%",
+              background: loading ? "var(--accent)" : modelColor,
+              color: loading ? "var(--accent)" : modelColor,
+              transition: "background 300ms ease-out",
+            }}
+          />
         </button>
         {dropdown}
       </div>
@@ -222,8 +225,16 @@ export function ModelSwitcher({ onModelLoaded, collapsed = false }: ModelSwitche
         className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md bg-[var(--bg-surface)] hover:bg-[var(--bg-elevated)] transition-colors duration-[var(--duration-fast)]"
       >
         <div
-          className="w-2 h-2 rounded-full shrink-0"
-          style={{ background: modelColor }}
+          className={loading ? "model-dot-loading" : ""}
+          style={{
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            background: loading ? "var(--accent)" : modelColor,
+            color: loading ? "var(--accent)" : modelColor,
+            flexShrink: 0,
+            transition: "background 300ms ease-out",
+          }}
         />
         <div className="flex-1 text-left min-w-0">
           {loading ? (
@@ -234,7 +245,8 @@ export function ModelSwitcher({ onModelLoaded, collapsed = false }: ModelSwitche
               <div className="text-[10px] text-[var(--text-tertiary)]">
                 {loadMessage || "Loading..."}
               </div>
-              <div className="mt-1 h-1 w-full bg-[var(--bg-primary)] rounded-full overflow-hidden">
+              <div className="shimmer-bar mt-1.5 w-full" style={{ opacity: loadProgress > 0 ? 0 : 1, transition: "opacity 300ms" }} />
+              <div className="mt-1 h-[3px] w-full bg-[var(--bg-primary)] rounded-full overflow-hidden" style={{ opacity: loadProgress > 0 ? 1 : 0, transition: "opacity 300ms" }}>
                 <div
                   className="h-full bg-[var(--accent)] rounded-full transition-all duration-300 ease-out"
                   style={{ width: `${Math.max(loadProgress * 100, 2)}%` }}

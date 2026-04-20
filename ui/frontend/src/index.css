@@ -108,3 +108,60 @@ body {
   outline: 1px solid var(--accent);
   outline-offset: 1px;
 }
+
+/* ── Thinking indicator: 3 dots with staggered wave ────────────── */
+@keyframes think-wave {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.3; }
+  30% { transform: translateY(-4px); opacity: 1; }
+}
+
+.thinking-dots {
+  display: inline-flex;
+  gap: 3px;
+  align-items: center;
+  height: 20px;
+  padding-left: 2px;
+}
+
+.thinking-dots span {
+  display: block;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: think-wave 1.4s ease-in-out infinite;
+}
+
+.thinking-dots span:nth-child(2) { animation-delay: 0.16s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.32s; }
+
+/* ── Shimmer bar for model loading ─────────────────────────────── */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.shimmer-bar {
+  height: 3px;
+  border-radius: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--bg-elevated) 0%,
+    var(--accent) 40%,
+    var(--accent-hover) 50%,
+    var(--accent) 60%,
+    var(--bg-elevated) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 2s ease-in-out infinite;
+}
+
+/* ── Glow pulse on the model dot during loading ────────────────── */
+@keyframes glow-pulse {
+  0%, 100% { box-shadow: 0 0 4px 1px currentColor; opacity: 0.6; }
+  50% { box-shadow: 0 0 10px 3px currentColor; opacity: 1; }
+}
+
+.model-dot-loading {
+  animation: glow-pulse 2s ease-in-out infinite;
+}

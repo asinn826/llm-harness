@@ -59,32 +59,48 @@ export function ChatMessage({
         )}
       </div>
       <div className="text-[var(--text-primary)] text-sm leading-relaxed prose prose-invert prose-sm max-w-none">
-        <ReactMarkdown
-          components={{
-            code: ({ children, className }) => {
-              const isInline = !className;
-              if (isInline) {
-                return (
-                  <code className="px-1 py-0.5 rounded bg-[var(--bg-elevated)] text-[var(--accent)] text-xs font-[var(--font-mono)]">
-                    {children}
-                  </code>
-                );
-              }
-              return (
-                <pre className="bg-[var(--bg-primary)] border border-[var(--border-subtle)] rounded-md p-3 overflow-x-auto my-2">
-                  <code className="text-xs font-[var(--font-mono)] text-[var(--text-secondary)]">
-                    {children}
-                  </code>
-                </pre>
-              );
-            },
-          }}
-        >
-          {content}
-        </ReactMarkdown>
-        {isStreaming && (
-          <span className="inline-block w-1.5 h-4 bg-[var(--accent)] animate-pulse rounded-sm ml-0.5 align-text-bottom" />
-        )}
+        {content ? (
+          <>
+            <ReactMarkdown
+              components={{
+                code: ({ children, className }) => {
+                  const isInline = !className;
+                  if (isInline) {
+                    return (
+                      <code className="px-1 py-0.5 rounded bg-[var(--bg-elevated)] text-[var(--accent)] text-xs font-[var(--font-mono)]">
+                        {children}
+                      </code>
+                    );
+                  }
+                  return (
+                    <pre className="bg-[var(--bg-primary)] border border-[var(--border-subtle)] rounded-md p-3 overflow-x-auto my-2">
+                      <code className="text-xs font-[var(--font-mono)] text-[var(--text-secondary)]">
+                        {children}
+                      </code>
+                    </pre>
+                  );
+                },
+              }}
+            >
+              {content}
+            </ReactMarkdown>
+            {isStreaming && (
+              <span
+                className="inline-block w-1.5 h-4 rounded-sm ml-0.5 align-text-bottom"
+                style={{
+                  background: modelColor,
+                  animation: "think-wave 1.4s ease-in-out infinite",
+                }}
+              />
+            )}
+          </>
+        ) : isStreaming ? (
+          <div className="thinking-dots">
+            <span style={{ background: modelColor }} />
+            <span style={{ background: modelColor }} />
+            <span style={{ background: modelColor }} />
+          </div>
+        ) : null}
       </div>
     </div>
   );

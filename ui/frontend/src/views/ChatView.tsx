@@ -216,7 +216,7 @@ export function ChatView({ sessionId, onSessionCreated, currentModelId }: ChatVi
               />
             ))}
 
-            {streamingContent && (
+            {isGenerating && (
               <ChatMessage
                 role="assistant"
                 content={streamingContent}
