@@ -4,7 +4,58 @@
 
 Claude code at home: 
 
-## Run
+## Desktop App (UI)
+
+A native desktop app with model management, persistent sessions, and side-by-side model comparison.
+
+### Prerequisites
+
+- **Python 3.11+**: `brew install python@3.11`
+- **Node.js 20+**: `brew install node`
+- **Rust** (for native window): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
+
+### Setup
+
+```bash
+# Python dependencies
+pip3.11 install -r requirements.txt
+pip3.11 install fastapi 'uvicorn[standard]' websockets
+
+# Frontend dependencies
+cd ui/frontend && npm install && cd ../..
+```
+
+### Launch
+
+```bash
+./ui/dev.sh                # native desktop window (requires Rust)
+./ui/dev.sh --browser      # fallback: opens in your browser
+```
+
+The app starts a FastAPI backend on port 8000 and a Tauri native window (or browser at localhost:5173). Load a model from the sidebar dropdown, then start chatting.
+
+### Build (.dmg)
+
+```bash
+cd ui/frontend && npx tauri build
+```
+
+Output: `ui/frontend/src-tauri/target/release/bundle/dmg/`
+
+### macOS permissions
+
+The app checks permissions on startup and shows a banner if anything is missing:
+
+- **Full Disk Access** — needed to read iMessage/calendar databases. System Settings → Privacy & Security → Full Disk Access → add Terminal (or python3.11).
+- **Automation** — needed to send messages and create calendar events. Granted automatically on first use via system dialog.
+
+See [ui/README.md](ui/README.md) for architecture details, API reference, and project structure.
+
+---
+
+## CLI
+
+The original terminal interface — still fully functional alongside the desktop app.
 
 ```bash
 pip3.11 install -r requirements.txt
@@ -129,3 +180,6 @@ Then run with `python3.11` and `pip3.11`.
 | `harness.py` | The generation + tool-call loop + system prompt |
 | `cli.py` | Terminal UI (raw input, Ctrl+O overlay, streaming, Markdown rendering) |
 | `main.py` | Entry point (model loading, streaming, MLX/HF backend selection) |
+| `ui/backend/` | FastAPI server wrapping harness.py (REST + WebSocket) |
+| `ui/frontend/` | React + TypeScript + Tailwind desktop app (Tauri) |
+| `ui/dev.sh` | Dev launcher (backend + frontend with hot reload) |
