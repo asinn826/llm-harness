@@ -3,9 +3,9 @@ import { Sidebar } from "./components/Sidebar";
 import { ModelSwitcher } from "./components/ModelSwitcher";
 import { ChatView } from "./views/ChatView";
 import { CompareView } from "./views/CompareView";
-import { SessionsView } from "./views/SessionsView";
+import { SettingsView } from "./views/SettingsView";
 
-type View = "chat" | "compare" | "sessions" | "settings";
+type View = "chat" | "compare" | "settings";
 
 export default function App() {
   const [currentView, setCurrentView] = useState<View>("chat");
@@ -13,7 +13,6 @@ export default function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [currentModelId, setCurrentModelId] = useState<string | null>(null);
   const [currentBackend, setCurrentBackend] = useState<string | null>(null);
-  // Bumped to trigger sidebar session list refresh
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
 
   const handleModelLoaded = useCallback((modelId: string, backend: string) => {
@@ -38,11 +37,6 @@ export default function App() {
 
   const handleTitleUpdated = useCallback((_sessionId: string, _title: string) => {
     setSessionRefreshKey((k) => k + 1);
-  }, []);
-
-  const handleResumeSession = useCallback((id: string) => {
-    setActiveSessionId(id);
-    setCurrentView("chat");
   }, []);
 
   return (
@@ -74,14 +68,7 @@ export default function App() {
           />
         )}
         {currentView === "compare" && <CompareView />}
-        {currentView === "sessions" && <SessionsView onResumeSession={handleResumeSession} />}
-        {currentView === "settings" && (
-          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center" }}>
-            <div style={{ textAlign: "center", color: "var(--text-muted)", fontSize: 14 }}>
-              Settings coming soon
-            </div>
-          </div>
-        )}
+        {currentView === "settings" && <SettingsView />}
       </div>
     </div>
   );

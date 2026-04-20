@@ -706,6 +706,93 @@ async def _handle_compare_message(ws: WebSocket, msg: dict):
     await ws.send_json({"type": "compare_done", "session_id": session_id})
 
 
+# ── Settings: API keys ────────────────────────────────────────────────────
+
+_ENV_FILE = Path(__file__).resolve().parent.parent.parent / ".env"
+_ALLOWED_KEYS = {"TAVILY_API_KEY", "HF_TOKEN"}
+
+
+def _read_env() -> dict[str, str]:
+    """Read key=value pairs from .env file."""
+    result = {}
+    if _ENV_FILE.exists():
+        for line in _ENV_FILE.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, value = line.partition("=")
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key in _ALLOWED_KEYS:
+                result[key] = value
+    return result
+
+
+def _write_env(updates: dict[str, str]):
+    """Update specific keys in .env, preserving other content."""
+    lines = []
+    if _ENV_FILE.exists():
+        lines = _ENV_FILE.read_text().splitlines()
+
+    updated_keys = set()
+    new_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.partition("=")[0].strip()
+            if key in updates:
+                new_lines.append(f"{key}={updates[key]}")
+                updated_keys.add(key)
+                continue
+        new_lines.append(line)
+
+    # Append any keys that weren't already in the file
+    for key, value in updates.items():
+        if key not in updated_keys:
+            new_lines.append(f"{key}={value}")
+
+    _ENV_FILE.write_text("\n".join(new_lines) + "\n")
+
+    # Also update os.environ so changes take effect immediately
+    import os
+    for key, value in updates.items():
+        if value:
+            os.environ[key] = value
+        elif key in os.environ:
+            del os.environ[key]
+
+
+class SaveKeyRequest(BaseModel):
+    key: str
+    value: str
+
+
+@app.get("/settings/keys")
+async def get_api_keys():
+    """Return current API key values (masked for display)."""
+    raw = _read_env()
+    result = {}
+    for key in _ALLOWED_KEYS:
+        val = raw.get(key, "")
+        if val:
+            # Show first 4 and last 4 chars, mask the rest
+            if len(val) > 10:
+                result[key] = val[:4] + "•" * (len(val) - 8) + val[-4:]
+            else:
+                result[key] = "•" * len(val)
+        else:
+            result[key] = ""
+    return result
+
+
+@app.post("/settings/keys")
+async def save_api_key(req: SaveKeyRequest):
+    if req.key not in _ALLOWED_KEYS:
+        raise HTTPException(status_code=400, detail=f"Unknown key: {req.key}")
+    _write_env({req.key: req.value})
+    return {"status": "ok"}
+
+
 # ── Health check ──────────────────────────────────────────────────────────
 
 @app.get("/health")

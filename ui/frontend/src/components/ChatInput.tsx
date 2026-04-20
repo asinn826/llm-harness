@@ -75,6 +75,7 @@ export function ChatInput({ onSend, disabled, placeholder = "Message..." }: Chat
         <button
           onClick={handleSend}
           disabled={!value.trim() || disabled}
+          className={value.trim() && !disabled ? "send-btn-active" : ""}
           style={{
             width: 28,
             height: 28,
@@ -85,8 +86,10 @@ export function ChatInput({ onSend, disabled, placeholder = "Message..." }: Chat
             border: "none",
             cursor: value.trim() && !disabled ? "pointer" : "default",
             flexShrink: 0,
-            background: value.trim() && !disabled ? "var(--accent)" : "var(--bg-elevated)",
-            color: value.trim() && !disabled ? "white" : "var(--text-muted)",
+            ...(!value.trim() || disabled ? {
+              background: "var(--bg-elevated)",
+              color: "var(--text-muted)",
+            } : {}),
           }}
         >
           <ArrowUp size={16} strokeWidth={2} />

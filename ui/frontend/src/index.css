@@ -110,6 +110,20 @@ body {
   outline-offset: 1px;
 }
 
+/* ── Send button hover ─────────────────────────────────────────── */
+.send-btn-active {
+  background: var(--accent);
+  color: white;
+  transition: background 120ms ease-out, transform 120ms ease-out;
+}
+.send-btn-active:hover {
+  background: var(--accent-hover);
+  transform: scale(1.05);
+}
+.send-btn-active:active {
+  transform: scale(0.95);
+}
+
 /* ── Thinking indicator: 3 dots with staggered wave ────────────── */
 @keyframes think-wave {
   0%, 60%, 100% { transform: translateY(0); opacity: 0.3; }
