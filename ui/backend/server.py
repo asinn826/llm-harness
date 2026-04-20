@@ -45,19 +45,12 @@ async def _generate_session_title(session_id: str, user_message: str, ws: WebSoc
     truncating the user message if generation fails.
     """
     try:
-        prompt_messages = [
-            {"role": "user", "content": (
-                f"Summarize this request in 4-6 words as a short title. "
-                f"Reply with ONLY the title, nothing else. No quotes, no punctuation at the end.\n\n"
-                f"\"{user_message}\""
-            )},
-        ]
-
         def _gen():
-            chunks = []
-            for token in model_manager.generate(prompt_messages):
-                chunks.append(token)
-            return ''.join(chunks).strip()
+            return model_manager.generate_short(
+                system_prompt="You generate short titles. Reply with ONLY a 4-6 word title. No explanation, no quotes, no punctuation.",
+                user_message=f"Title for this request: {user_message}",
+                max_tokens=20,
+            )
 
         raw_title = await asyncio.to_thread(_gen)
         title = _strip_think_tags(raw_title)

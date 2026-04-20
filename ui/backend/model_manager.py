@@ -268,7 +268,7 @@ class ModelManager:
             torch.mps.empty_cache()
 
     def generate(self, conversation: list) -> str:
-        """Run one generation step. Returns the raw model output string.
+        """Run one generation step with the full tool-use system prompt.
 
         Does NOT handle tool calls — that's the harness's job.
         Raises RuntimeError if no model is loaded.
@@ -280,6 +280,65 @@ class ModelManager:
             return self._generate_mlx(conversation)
         else:
             return self._generate_hf(conversation)
+
+    def generate_short(self, system_prompt: str, user_message: str, max_tokens: int = 30):
+        """Quick generation with a custom system prompt and low token limit.
+
+        Used for lightweight tasks like title generation where the full
+        tool-use system prompt would cause the model to overthink.
+        """
+        if not self.is_loaded:
+            raise RuntimeError("No model loaded")
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_message},
+        ]
+
+        if hasattr(self._tokenizer, "apply_chat_template") and self._tokenizer.chat_template:
+            try:
+                prompt = self._tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True,
+                    enable_thinking=False,
+                )
+            except TypeError:
+                prompt = self._tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True,
+                )
+        else:
+            prompt = self._fallback_prompt(messages)
+
+        chunks = []
+        if self._info.backend == "mlx":
+            from mlx_lm import stream_generate
+            extra_kwargs = _mlx_stream_kwargs()
+            for resp in stream_generate(self._model, self._tokenizer, prompt=prompt,
+                                        max_tokens=max_tokens, **extra_kwargs):
+                token = resp.text if hasattr(resp, 'text') else resp
+                chunks.append(token)
+        else:
+            from transformers import TextIteratorStreamer
+            import threading as _th
+
+            inputs = self._tokenizer(text=prompt, return_tensors="pt").to(self._model.device)
+            _MM_KEYS = {'mm_token_type_ids', 'pixel_values', 'image_sizes',
+                        'pixel_attention_mask', 'image_grid_thw'}
+            gen_inputs = {k: v for k, v in inputs.items() if k not in _MM_KEYS}
+
+            streamer = TextIteratorStreamer(self._tokenizer, skip_prompt=True, skip_special_tokens=True)
+
+            def _run():
+                with torch.no_grad():
+                    self._model.generate(**gen_inputs, max_new_tokens=max_tokens,
+                                         do_sample=False, streamer=streamer)
+
+            t = _th.Thread(target=_run, daemon=True)
+            t.start()
+            for token in streamer:
+                chunks.append(token)
+            t.join(timeout=5)
+
+        return ''.join(chunks).strip()
 
     def _generate_mlx(self, conversation: list) -> str:
         """Generate with mlx-lm, collecting all tokens into a string."""
