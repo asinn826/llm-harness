@@ -818,15 +818,23 @@ def _check_automation(app_name: str) -> bool:
         return False
 
 
+def _check_full_disk_access() -> bool:
+    """Check if this process can read Messages chat.db (requires Full Disk Access)."""
+    import os
+    db_path = os.path.expanduser("~/Library/Messages/chat.db")
+    return os.access(db_path, os.R_OK)
+
+
 @app.get("/permissions")
 async def check_permissions():
-    """Check macOS Automation permissions for Messages and Contacts."""
+    """Check macOS Automation + Full Disk Access permissions."""
     if _platform.system() != "Darwin":
-        return {"messages": True, "contacts": True}
+        return {"messages": True, "contacts": True, "full_disk_access": True}
 
     messages = await asyncio.to_thread(_check_automation, "Messages")
     contacts = await asyncio.to_thread(_check_automation, "Contacts")
-    return {"messages": messages, "contacts": contacts}
+    fda = await asyncio.to_thread(_check_full_disk_access)
+    return {"messages": messages, "contacts": contacts, "full_disk_access": fda}
 
 
 @app.post("/permissions/open-settings")
@@ -835,6 +843,15 @@ async def open_automation_settings():
     if _platform.system() != "Darwin":
         return {"status": "not_macos"}
     _sp.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation"])
+    return {"status": "ok"}
+
+
+@app.post("/permissions/open-full-disk")
+async def open_full_disk_settings():
+    """Open macOS System Settings to the Full Disk Access pane."""
+    if _platform.system() != "Darwin":
+        return {"status": "not_macos"}
+    _sp.run(["open", "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles"])
     return {"status": "ok"}
 
 

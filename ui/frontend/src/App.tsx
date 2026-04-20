@@ -15,14 +15,16 @@ export default function App() {
   const [currentModelId, setCurrentModelId] = useState<string | null>(null);
   const [currentBackend, setCurrentBackend] = useState<string | null>(null);
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
-  const [permissionsOk, setPermissionsOk] = useState(true);
+  const [missingAutomation, setMissingAutomation] = useState(false);
+  const [missingFullDisk, setMissingFullDisk] = useState(false);
 
-  // Check macOS Automation permissions on startup
+  // Check macOS permissions on startup
   useEffect(() => {
     fetch("/api/permissions")
       .then((r) => r.json())
       .then((data) => {
-        setPermissionsOk(data.messages && data.contacts);
+        setMissingAutomation(!data.messages || !data.contacts);
+        setMissingFullDisk(!data.full_disk_access);
       })
       .catch(() => {});
   }, []);
@@ -55,7 +57,8 @@ export default function App() {
     fetch("/api/permissions")
       .then((r) => r.json())
       .then((data) => {
-        setPermissionsOk(data.messages && data.contacts);
+        setMissingAutomation(!data.messages || !data.contacts);
+        setMissingFullDisk(!data.full_disk_access);
       })
       .catch(() => {});
   }, []);
@@ -80,8 +83,12 @@ export default function App() {
       />
 
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
-        {!permissionsOk && (
-          <PermissionsBanner onRetry={handlePermissionsRetry} />
+        {(missingAutomation || missingFullDisk) && (
+          <PermissionsBanner
+            missingAutomation={missingAutomation}
+            missingFullDisk={missingFullDisk}
+            onRetry={handlePermissionsRetry}
+          />
         )}
         {currentView === "chat" && (
           <ChatView
