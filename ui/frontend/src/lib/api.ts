@@ -1,6 +1,6 @@
 /** API client for the FastAPI backend. */
 
-import type { ModelsResponse, Session, Message } from "./types";
+import type { ModelsResponse, Session, Message, HubSearchResult, ModelDetails } from "./types";
 
 const BASE = "/api";
 
@@ -34,6 +34,40 @@ export const models = {
 
   unload: () =>
     request<{ status: string }>("/models/unload", { method: "POST" }),
+
+  search: (opts: {
+    q?: string;
+    sort?: "downloads" | "likes" | "lastModified" | "trending";
+    backend?: "all" | "mlx" | "hf";
+    limit?: number;
+  } = {}) => {
+    const p = new URLSearchParams();
+    if (opts.q) p.set("q", opts.q);
+    if (opts.sort) p.set("sort", opts.sort);
+    if (opts.backend) p.set("backend", opts.backend);
+    if (opts.limit) p.set("limit", String(opts.limit));
+    return request<{ results: HubSearchResult[]; error?: string }>(
+      `/models/search?${p.toString()}`
+    );
+  },
+
+  details: (modelId: string) => {
+    const [owner, repo] = modelId.split("/");
+    return request<ModelDetails>(`/models/${owner}/${repo}/details`);
+  },
+};
+
+// ── Preferences ─────────────────────────────────────────────────────────
+
+export const prefs = {
+  get: () =>
+    request<{ hub_search_enabled: boolean }>("/settings/prefs"),
+
+  setHubSearch: (enabled: boolean) =>
+    request<{ status: string; hub_search_enabled: boolean }>(
+      "/settings/hub-search",
+      { method: "POST", body: JSON.stringify({ enabled }) }
+    ),
 };
 
 // ── Sessions ────────────────────────────────────────────────────────────

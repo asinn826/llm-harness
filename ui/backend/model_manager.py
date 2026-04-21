@@ -110,6 +110,48 @@ def _format_bytes(n: int) -> str:
     return f"{n:.1f} PB"
 
 
+# ── Tool-use tier persistence ─────────────────────────────────────────────
+#
+# For non-curated (cached-only) models, we bump the tier from "unknown" to
+# "likely" once we've seen the tokenizer's chat template mention tool-use
+# keywords. Cached to avoid re-checking every list_models call.
+
+_TIER_FILE = Path.home() / ".llm_harness" / "tool_use_tiers.json"
+
+
+def _load_tier_overrides() -> dict:
+    try:
+        import json
+        with open(_TIER_FILE) as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_tier_overrides(data: dict):
+    import json
+    _TIER_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(_TIER_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+def _inspect_chat_template(tokenizer) -> Optional[str]:
+    """Return 'likely' if the tokenizer's chat_template mentions tools.
+
+    Returns None if no template or no tool-use hints. Never raises.
+    """
+    try:
+        tpl = getattr(tokenizer, "chat_template", None)
+        if not tpl:
+            return None
+        t = str(tpl).lower()
+        if "tool_calls" in t or "functions" in t or "tools" in t:
+            return "likely"
+        return None
+    except Exception:
+        return None
+
+
 # ── Progress tqdm patch (shared by MLX and HF loaders) ────────────────────
 
 def _make_progress_tqdm(model_id: str, progress_callback, is_cached: bool):
@@ -174,6 +216,7 @@ class ModelManager:
         recommended_ids = {m["id"] for m in RECOMMENDED_MODELS}
         cached = find_cached_models()
         cached_set = set(cached)
+        tier_overrides = _load_tier_overrides()
 
         recommended = []
         for m in RECOMMENDED_MODELS:
@@ -199,7 +242,7 @@ class ModelManager:
                     "size_bytes": size_bytes,
                     "size_label": _format_bytes(size_bytes),
                     "last_used": _last_used_for_cached(model_id),
-                    "tool_use_tier": "unknown",
+                    "tool_use_tier": tier_overrides.get(model_id, "unknown"),
                     "is_cached": True,
                     "is_loaded": self._info is not None and self._info.model_id == model_id,
                 })
@@ -244,6 +287,13 @@ class ModelManager:
                     self._model = model
 
                 self._info.status = "ready"
+                # Inspect chat template for tool-use hints (cheap, cached).
+                tier = _inspect_chat_template(self._tokenizer)
+                if tier:
+                    overrides = _load_tier_overrides()
+                    if overrides.get(model_id) != tier:
+                        overrides[model_id] = tier
+                        _save_tier_overrides(overrides)
                 if progress_callback:
                     progress_callback(LoadProgress(model_id=model_id, progress=1.0,
                                                    status="ready", message="Model loaded"))

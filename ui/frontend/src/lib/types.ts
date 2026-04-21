@@ -34,6 +34,38 @@ export interface ModelsResponse {
   current_backend: string | null;
 }
 
+/** A single Hub search hit returned by GET /models/search. */
+export interface HubSearchResult {
+  id: string;
+  author: string;
+  name: string;
+  downloads: number;
+  likes: number;
+  last_modified: string | null;
+  tags: string[];
+  pipeline_tag: string | null;
+  gated: boolean;
+  backend_hint: "mlx" | "hf";
+  tool_use_tier: "verified" | "likely" | "unknown";
+  is_cached: boolean;
+  compatible: boolean;
+}
+
+/** Detailed info returned by GET /models/{owner}/{repo}/details */
+export interface ModelDetails {
+  id: string;
+  description: string;
+  tags: string[];
+  license: string | null;
+  downloads: number;
+  likes: number;
+  gated: boolean;
+  pipeline_tag: string | null;
+  model_size_bytes: number;
+  last_modified: string | null;
+  readme_markdown: string;
+}
+
 /** State of an in-flight model load (lives in DownloadsContext). */
 export type DownloadStatus = "downloading" | "loading" | "ready" | "error";
 

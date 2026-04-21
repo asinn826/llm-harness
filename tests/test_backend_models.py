@@ -150,3 +150,152 @@ def test_make_progress_tqdm_no_total_no_callback():
     bar.update(5)
     # No callback because total is None
     assert len(received) == 0
+
+
+# ── Chat-template inspection ──────────────────────────────────────────────
+
+
+def test_inspect_chat_template_detects_tools():
+    from ui.backend.model_manager import _inspect_chat_template
+
+    class FakeTokenizer:
+        chat_template = "{% if tool_calls %}{{ tools }}{% endif %}"
+
+    assert _inspect_chat_template(FakeTokenizer()) == "likely"
+
+
+def test_inspect_chat_template_none_if_no_hints():
+    from ui.backend.model_manager import _inspect_chat_template
+
+    class FakeTokenizer:
+        chat_template = "{% for m in messages %}{{ m.content }}{% endfor %}"
+
+    assert _inspect_chat_template(FakeTokenizer()) is None
+
+
+def test_inspect_chat_template_handles_no_template():
+    from ui.backend.model_manager import _inspect_chat_template
+
+    class FakeTokenizer:
+        pass
+
+    assert _inspect_chat_template(FakeTokenizer()) is None
+
+
+# ── Hub search endpoint ──────────────────────────────────────────────────
+
+
+@pytest.fixture
+def client():
+    from fastapi.testclient import TestClient
+    from ui.backend.server import app
+    return TestClient(app)
+
+
+def test_hub_search_returns_200_on_exception(client):
+    """When HfApi raises, endpoint returns 200 with empty results + error."""
+    with patch("huggingface_hub.HfApi") as MockApi:
+        MockApi.return_value.list_models.side_effect = RuntimeError("network down")
+        resp = client.get("/models/search?q=test")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["results"] == []
+        assert "error" in data
+
+
+def test_hub_search_normalizes_hits(client):
+    """Valid HfApi response gets normalized into our shape."""
+    from datetime import datetime
+
+    fake_hit = MagicMock()
+    fake_hit.id = "org/my-model"
+    fake_hit.downloads = 1234
+    fake_hit.likes = 56
+    fake_hit.last_modified = datetime(2025, 1, 1)
+    fake_hit.tags = ["text-generation", "safetensors"]
+    fake_hit.pipeline_tag = "text-generation"
+    fake_hit.gated = False
+
+    with patch("huggingface_hub.HfApi") as MockApi:
+        MockApi.return_value.list_models.return_value = iter([fake_hit])
+        # Clear cache so we actually hit our mock
+        from ui.backend.server import _search_cache
+        _search_cache.clear()
+        resp = client.get("/models/search?q=unique-query-xyz")
+        assert resp.status_code == 200
+        results = resp.json()["results"]
+        assert len(results) == 1
+        r = results[0]
+        assert r["id"] == "org/my-model"
+        assert r["author"] == "org"
+        assert r["name"] == "my-model"
+        assert r["downloads"] == 1234
+        assert r["likes"] == 56
+        assert r["backend_hint"] == "hf"  # no "mlx" tag
+        assert r["tool_use_tier"] == "unknown"  # not in curated list
+        assert r["compatible"] is True
+
+
+def test_hub_search_mlx_tag_gets_mlx_hint(client):
+    fake_hit = MagicMock()
+    fake_hit.id = "mlx-community/something"
+    fake_hit.downloads = 1
+    fake_hit.likes = 0
+    fake_hit.last_modified = None
+    fake_hit.tags = ["mlx", "text-generation"]
+    fake_hit.pipeline_tag = "text-generation"
+    fake_hit.gated = False
+
+    with patch("huggingface_hub.HfApi") as MockApi:
+        MockApi.return_value.list_models.return_value = iter([fake_hit])
+        from ui.backend.server import _search_cache
+        _search_cache.clear()
+        resp = client.get("/models/search?q=distinct-mlx-query")
+        data = resp.json()
+        assert data["results"][0]["backend_hint"] == "mlx"
+
+
+# ── Path-traversal guard ──────────────────────────────────────────────────
+
+
+def test_details_rejects_path_traversal(client):
+    """../ in owner or repo returns 422 (FastAPI Path regex validation)."""
+    resp = client.get("/models/..%2F..%2Fetc/repo/details")
+    # FastAPI URL-decodes %2F which breaks the path; it should 404 or 422.
+    # The important thing is we don't hit the backend.
+    assert resp.status_code in (404, 422, 400)
+
+
+def test_details_rejects_traversal_via_dots(client):
+    """owner=".." returns 422 from the pattern validator."""
+    resp = client.get("/models/.../repo/details")
+    assert resp.status_code == 422
+
+
+def test_details_rejects_empty_segment(client):
+    """Empty owner or repo fails validation."""
+    resp = client.get("/models//repo/details")
+    assert resp.status_code in (404, 422)
+
+
+# ── Settings: hub_search_enabled ──────────────────────────────────────────
+
+
+def test_prefs_default_to_hub_disabled(client, tmp_path, monkeypatch):
+    """Fresh install has hub_search_enabled=False."""
+    # Point the prefs file at a temp location
+    monkeypatch.setattr("ui.backend.server._PREFS_FILE", tmp_path / "preferences.json")
+    resp = client.get("/settings/prefs")
+    assert resp.status_code == 200
+    assert resp.json()["hub_search_enabled"] is False
+
+
+def test_set_hub_search_persists(client, tmp_path, monkeypatch):
+    monkeypatch.setattr("ui.backend.server._PREFS_FILE", tmp_path / "preferences.json")
+    resp = client.post("/settings/hub-search", json={"enabled": True})
+    assert resp.status_code == 200
+    assert resp.json()["hub_search_enabled"] is True
+
+    # Round-trip
+    resp = client.get("/settings/prefs")
+    assert resp.json()["hub_search_enabled"] is True

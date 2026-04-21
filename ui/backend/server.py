@@ -185,6 +185,227 @@ async def current_model():
     }
 
 
+# ── Hub search + details ──────────────────────────────────────────────────
+#
+# Uses huggingface_hub.HfApi (already installed transitively via mlx-lm /
+# transformers; no new dep). Results are normalized and cached briefly
+# to avoid hammering the Hub. On any Hub error we return 200 with an
+# empty result set + error message — the Models page should never crash
+# because the Hub is down.
+
+from fastapi import Path as FPath
+
+# owner/repo validation — prevents path traversal and garbage IDs before
+# they reach the Hub API or the local filesystem.
+_HF_ID_RE = r"^[a-zA-Z0-9][a-zA-Z0-9_.\-]{0,95}$"
+
+
+def _load_curated_allowlist() -> set[str]:
+    """Model IDs from recommended_models.json — get 'verified' tool_use_tier."""
+    import json
+    path = Path(__file__).resolve().parent / "recommended_models.json"
+    try:
+        with open(path) as f:
+            return {m["id"] for m in json.load(f)}
+    except Exception:
+        return set()
+
+
+_CURATED_IDS = _load_curated_allowlist()
+
+
+def _infer_backend_hint(tags: list[str]) -> str:
+    """'mlx' if the repo is MLX-specific, else 'hf'."""
+    return "mlx" if "mlx" in (tags or []) else "hf"
+
+
+def _is_gguf_only(siblings) -> bool:
+    """True if all weight files are GGUF (not runnable by our harness)."""
+    if not siblings:
+        return False
+    filenames = [getattr(s, "rfilename", "") for s in siblings]
+    has_native = any(
+        f.endswith(".safetensors") or f.endswith(".npz") or f.endswith(".bin")
+        for f in filenames
+    )
+    has_gguf = any(f.endswith(".gguf") for f in filenames)
+    return has_gguf and not has_native
+
+
+def _tool_use_tier_for(model_id: str) -> str:
+    """Default tier for a Hub hit — 'verified' if curated, else 'unknown'.
+
+    PR 2 will add 'likely' via chat-template inspection on first load.
+    """
+    return "verified" if model_id in _CURATED_IDS else "unknown"
+
+
+# In-process TTL cache for search — keyed on query params, 60s expiry.
+_search_cache: dict[tuple, tuple[float, dict]] = {}
+_SEARCH_TTL = 60.0
+
+
+@app.get("/models/search")
+async def hub_search(
+    q: str = Query("", max_length=200),
+    sort: str = Query("downloads", pattern="^(downloads|likes|lastModified|trending)$"),
+    backend: str = Query("all", pattern="^(all|mlx|hf)$"),
+    limit: int = Query(30, ge=1, le=100),
+):
+    """Search huggingface.co for text-generation models.
+
+    Returns `{results: [...], error?: str}`. Never raises — on Hub error
+    we return an empty list with the error surfaced to the client.
+    """
+    # Cache lookup
+    cache_key = (q, sort, backend, limit)
+    now = time.time()
+    cached = _search_cache.get(cache_key)
+    if cached and (now - cached[0]) < _SEARCH_TTL:
+        return cached[1]
+
+    def _do_search():
+        from huggingface_hub import HfApi
+        api = HfApi()
+        hub_filter = None
+        if backend == "mlx":
+            hub_filter = "mlx"  # tag filter
+        kwargs = dict(
+            pipeline_tag="text-generation",
+            limit=limit,
+            sort=sort,
+        )
+        if q:
+            kwargs["search"] = q
+        if hub_filter:
+            kwargs["filter"] = hub_filter
+        return list(api.list_models(**kwargs))
+
+    try:
+        hits = await asyncio.to_thread(_do_search)
+    except Exception as e:
+        return {"results": [], "error": f"Could not reach HuggingFace: {e}"}
+
+    # Set of locally cached model IDs (for is_cached flag on each hit)
+    from main import find_cached_models
+    cached_set = set(find_cached_models())
+
+    results = []
+    for h in hits:
+        tags = getattr(h, "tags", []) or []
+        hint = _infer_backend_hint(tags)
+        if backend == "hf" and hint == "mlx":
+            continue  # user filtered to HF-only
+        # Skip if filtered to HF but the repo is tagged mlx — already handled.
+        model_id = h.id
+        author = model_id.split("/")[0] if "/" in model_id else ""
+        name = model_id.split("/")[-1]
+        last_mod = getattr(h, "last_modified", None) or getattr(h, "lastModified", None)
+        last_mod_str = last_mod.isoformat() if hasattr(last_mod, "isoformat") else (str(last_mod) if last_mod else None)
+
+        results.append({
+            "id": model_id,
+            "author": author,
+            "name": name,
+            "downloads": getattr(h, "downloads", 0) or 0,
+            "likes": getattr(h, "likes", 0) or 0,
+            "last_modified": last_mod_str,
+            "tags": tags,
+            "pipeline_tag": getattr(h, "pipeline_tag", None),
+            "gated": bool(getattr(h, "gated", False)),
+            "backend_hint": hint,
+            "tool_use_tier": _tool_use_tier_for(model_id),
+            "is_cached": model_id in cached_set,
+            # compatible is determined per-hit only if we have siblings (full=true).
+            # list_models doesn't return siblings; assume compatible by default.
+            "compatible": True,
+        })
+
+    payload = {"results": results}
+    _search_cache[cache_key] = (now, payload)
+    return payload
+
+
+# Per-model details (owner + repo path params — validated against regex)
+_details_cache: dict[str, tuple[float, dict]] = {}
+_DETAILS_TTL = 600.0
+
+
+@app.get("/models/{owner}/{repo}/details")
+async def model_details(
+    owner: str = FPath(..., pattern=_HF_ID_RE),
+    repo: str = FPath(..., pattern=_HF_ID_RE),
+):
+    """Detailed info for a single Hub model: stats, sibling sizes, README."""
+    model_id = f"{owner}/{repo}"
+
+    now = time.time()
+    cached = _details_cache.get(model_id)
+    if cached and (now - cached[0]) < _DETAILS_TTL:
+        return cached[1]
+
+    def _fetch():
+        from huggingface_hub import HfApi, hf_hub_download
+        import os as _os
+        token = _os.environ.get("HF_TOKEN") or None
+        api = HfApi()
+        info = api.model_info(model_id, files_metadata=True, token=token)
+
+        # Sum weight file sizes
+        size = 0
+        for s in getattr(info, "siblings", []) or []:
+            fname = getattr(s, "rfilename", "") or ""
+            if fname.endswith((".safetensors", ".bin", ".gguf", ".npz")):
+                size += getattr(s, "size", 0) or 0
+
+        # README via hf_hub_download (cached) with raw-URL fallback
+        readme = ""
+        try:
+            readme_path = hf_hub_download(model_id, "README.md", token=token)
+            with open(readme_path, encoding="utf-8") as f:
+                readme = f.read()
+        except Exception:
+            try:
+                import urllib.request as _req
+                url = f"https://huggingface.co/{model_id}/raw/main/README.md"
+                with _req.urlopen(url, timeout=10) as resp:
+                    readme = resp.read().decode("utf-8", errors="replace")
+            except Exception:
+                readme = ""
+        if len(readme) > 8192:
+            readme = readme[:8192] + "\n\n… (truncated)"
+
+        last_mod = getattr(info, "last_modified", None) or getattr(info, "lastModified", None)
+        last_mod_str = last_mod.isoformat() if hasattr(last_mod, "isoformat") else (str(last_mod) if last_mod else None)
+        card = getattr(info, "card_data", None) or getattr(info, "cardData", None)
+        license_ = None
+        if card:
+            # card can be a dict-like or object
+            license_ = getattr(card, "license", None) if not isinstance(card, dict) else card.get("license")
+
+        return {
+            "id": model_id,
+            "description": (getattr(card, "model_summary", None) if not isinstance(card, dict) else (card or {}).get("model_summary")) or "",
+            "tags": list(getattr(info, "tags", []) or []),
+            "license": license_,
+            "downloads": getattr(info, "downloads", 0) or 0,
+            "likes": getattr(info, "likes", 0) or 0,
+            "gated": bool(getattr(info, "gated", False)),
+            "pipeline_tag": getattr(info, "pipeline_tag", None),
+            "model_size_bytes": size,
+            "last_modified": last_mod_str,
+            "readme_markdown": readme,
+        }
+
+    try:
+        data = await asyncio.to_thread(_fetch)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Could not fetch model details: {e}")
+
+    _details_cache[model_id] = (now, data)
+    return data
+
+
 # ── Sessions endpoints ────────────────────────────────────────────────────
 
 class CreateSessionRequest(BaseModel):
@@ -791,6 +1012,47 @@ async def save_api_key(req: SaveKeyRequest):
         raise HTTPException(status_code=400, detail=f"Unknown key: {req.key}")
     _write_env({req.key: req.value})
     return {"status": "ok"}
+
+
+# Small JSON-backed preference store for non-secret app settings.
+_PREFS_FILE = Path.home() / ".llm_harness" / "preferences.json"
+
+
+def _read_prefs() -> dict:
+    try:
+        import json as _json
+        with open(_PREFS_FILE) as f:
+            return _json.load(f)
+    except Exception:
+        return {}
+
+
+def _write_prefs(updates: dict):
+    import json as _json
+    prefs = _read_prefs()
+    prefs.update(updates)
+    _PREFS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    with open(_PREFS_FILE, "w") as f:
+        _json.dump(prefs, f, indent=2)
+
+
+class HubSearchRequest(BaseModel):
+    enabled: bool
+
+
+@app.get("/settings/prefs")
+async def get_prefs():
+    """User preferences (non-secret). Currently: hub_search_enabled."""
+    prefs = _read_prefs()
+    return {
+        "hub_search_enabled": bool(prefs.get("hub_search_enabled", False)),
+    }
+
+
+@app.post("/settings/hub-search")
+async def set_hub_search(req: HubSearchRequest):
+    _write_prefs({"hub_search_enabled": bool(req.enabled)})
+    return {"status": "ok", "hub_search_enabled": bool(req.enabled)}
 
 
 # ── Permissions check ─────────────────────────────────────────────────────
