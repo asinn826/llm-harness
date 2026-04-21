@@ -3,19 +3,48 @@
 export interface ModelInfo {
   id: string;
   name: string;
+  author?: string;
   backend: "mlx" | "hf";
   size?: string;
+  size_bytes?: number;
+  size_label?: string;
   heat?: "Cool" | "Warm" | "Hot";
   quality?: string;
   is_cached: boolean;
   is_loaded: boolean;
+  // Enriched fields (recommended + cached) — see recommended_models.json schema
+  parameters?: string;
+  quantization?: string;
+  context_window?: number;
+  description?: string;
+  license?: string;
+  tags?: string[];
+  hf_url?: string;
+  tool_use_tier?: "verified" | "likely" | "unknown";
+  last_used?: number; // unix timestamp
 }
+
+/** Alias for clarity — the same shape, just a domain marker. */
+export type RecommendedModel = ModelInfo;
 
 export interface ModelsResponse {
   recommended: ModelInfo[];
   cached: ModelInfo[];
   current: string | null;
   current_backend: string | null;
+}
+
+/** State of an in-flight model load (lives in DownloadsContext). */
+export type DownloadStatus = "downloading" | "loading" | "ready" | "error";
+
+export interface DownloadState {
+  modelId: string;
+  backend: "mlx" | "hf";
+  status: DownloadStatus;
+  progress: number; // 0..1
+  message: string;
+  error?: string;
+  startedAt: number;
 }
 
 export interface Session {

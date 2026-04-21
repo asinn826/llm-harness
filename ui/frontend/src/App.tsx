@@ -1,19 +1,29 @@
 import { useState, useCallback, useEffect } from "react";
+import { DownloadsProvider, useDownloads } from "./contexts/DownloadsContext";
 import { Sidebar } from "./components/Sidebar";
 import { ModelSwitcher } from "./components/ModelSwitcher";
 import { PermissionsBanner } from "./components/PermissionsBanner";
 import { ChatView } from "./views/ChatView";
 import { CompareView } from "./views/CompareView";
+import { ModelsView } from "./views/ModelsView";
 import { SettingsView } from "./views/SettingsView";
 
-type View = "chat" | "compare" | "settings";
+type View = "chat" | "compare" | "models" | "settings";
 
 export default function App() {
+  return (
+    <DownloadsProvider>
+      <AppInner />
+    </DownloadsProvider>
+  );
+}
+
+function AppInner() {
+  const { currentModelId } = useDownloads();
+
   const [currentView, setCurrentView] = useState<View>("chat");
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [currentModelId, setCurrentModelId] = useState<string | null>(null);
-  const [currentBackend, setCurrentBackend] = useState<string | null>(null);
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
   const [missingAutomation, setMissingAutomation] = useState(false);
   const [missingFullDisk, setMissingFullDisk] = useState(false);
@@ -27,11 +37,6 @@ export default function App() {
         setMissingFullDisk(!data.full_disk_access);
       })
       .catch(() => {});
-  }, []);
-
-  const handleModelLoaded = useCallback((modelId: string, backend: string) => {
-    setCurrentModelId(modelId);
-    setCurrentBackend(backend);
   }, []);
 
   const handleNewSession = useCallback(() => {
@@ -63,6 +68,10 @@ export default function App() {
       .catch(() => {});
   }, []);
 
+  const handleBrowseAll = useCallback(() => {
+    setCurrentView("models");
+  }, []);
+
   return (
     <div style={{ display: "flex", height: "100vh", overflow: "hidden", background: "var(--bg-primary)" }}>
       <Sidebar
@@ -76,7 +85,7 @@ export default function App() {
         refreshKey={sessionRefreshKey}
         modelSwitcher={
           <ModelSwitcher
-            onModelLoaded={handleModelLoaded}
+            onBrowseAll={handleBrowseAll}
             collapsed={sidebarCollapsed}
           />
         }
@@ -99,6 +108,7 @@ export default function App() {
           />
         )}
         {currentView === "compare" && <CompareView />}
+        {currentView === "models" && <ModelsView />}
         {currentView === "settings" && <SettingsView />}
       </div>
     </div>

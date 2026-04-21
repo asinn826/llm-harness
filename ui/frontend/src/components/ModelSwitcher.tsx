@@ -1,34 +1,46 @@
 import { useState, useEffect, useRef } from "react";
-import { ChevronDown, Loader2, Cpu, Flame, Snowflake, Thermometer, Check } from "lucide-react";
+import { ChevronDown, Loader2, Cpu, Check, ArrowRight } from "lucide-react";
 import { models as modelsApi } from "../lib/api";
 import type { ModelInfo } from "../lib/types";
 import { getModelColor } from "../lib/types";
+import { useDownloads } from "../contexts/DownloadsContext";
 
 interface ModelSwitcherProps {
-  onModelLoaded?: (modelId: string, backend: string) => void;
+  onBrowseAll?: () => void;
   collapsed?: boolean;
 }
 
-export function ModelSwitcher({ onModelLoaded, collapsed = false }: ModelSwitcherProps) {
+export function ModelSwitcher({ onBrowseAll, collapsed = false }: ModelSwitcherProps) {
+  const { downloads, currentModelId, currentBackend, startDownload } = useDownloads();
+
   const [isOpen, setIsOpen] = useState(false);
-  const [recommended, setRecommended] = useState<ModelInfo[]>([]);
   const [cached, setCached] = useState<ModelInfo[]>([]);
-  const [currentModel, setCurrentModel] = useState<string | null>(null);
-  const [currentBackend, setCurrentBackend] = useState<string | null>(null);
-  const [loading, setLoading] = useState<string | null>(null);
-  const [loadProgress, setLoadProgress] = useState(0);
-  const [loadMessage, setLoadMessage] = useState("");
-  const [loadError, setLoadError] = useState<string | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
+
+  // Any in-flight load (from here or from the Models page) shows progress
+  // in the trigger. Priority: loads started from the sidebar itself > any.
+  const activeDownload = Object.values(downloads).find(
+    (d) => d.status === "downloading" || d.status === "loading"
+  );
+  const loadingId = activeDownload?.modelId ?? null;
+  const loadProgress = activeDownload?.progress ?? 0;
+  const loadMessage = activeDownload?.message ?? "";
+  const loadError = Object.values(downloads).find((d) => d.status === "error")?.error ?? null;
 
   const fetchModels = async () => {
     try {
       const data = await modelsApi.list();
-      setRecommended(data.recommended);
-      setCached(data.cached);
-      setCurrentModel(data.current);
-      setCurrentBackend(data.current_backend);
+      // Sidebar is pure quick-switch: union of recommended + cached,
+      // but only models that are cached locally. Recommended models that
+      // aren't cached live on the Models page.
+      const quick = [
+        ...data.recommended.filter((m) => m.is_cached),
+        ...data.cached,
+      ];
+      // De-dup by id while preserving order
+      const seen = new Set<string>();
+      setCached(quick.filter((m) => (seen.has(m.id) ? false : seen.add(m.id))));
     } catch {
       // silently fail
     }
@@ -36,87 +48,41 @@ export function ModelSwitcher({ onModelLoaded, collapsed = false }: ModelSwitche
 
   useEffect(() => {
     fetchModels();
-  }, []);
+  }, [currentModelId]); // refresh list whenever the active model changes
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(e.target as Node)) {
-        if (!loading) setIsOpen(false);
+        if (!loadingId) setIsOpen(false);
       }
     };
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [loading]);
+  }, [loadingId]);
 
-  // Close dropdown when collapse state changes
   useEffect(() => {
     setIsOpen(false);
   }, [collapsed]);
 
   const handleSelect = (modelId: string, backend: string) => {
-    if (modelId === currentModel) {
+    if (modelId === currentModelId) {
       setIsOpen(false);
       return;
     }
-
-    setLoading(modelId);
-    setLoadProgress(0);
-    setLoadMessage("Connecting...");
-    setLoadError(null);
-
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const ws = new WebSocket(`${protocol}//${window.location.host}/ws/models/load`);
-
-    ws.onopen = () => {
-      ws.send(JSON.stringify({ model_id: modelId, backend }));
-    };
-
-    ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      switch (msg.type) {
-        case "progress":
-          setLoadProgress(msg.progress);
-          setLoadMessage(msg.message);
-          break;
-        case "done":
-          setCurrentModel(msg.model_id);
-          setCurrentBackend(msg.backend);
-          setLoading(null);
-          setLoadProgress(0);
-          setLoadMessage("");
-          setIsOpen(false);
-          onModelLoaded?.(msg.model_id, msg.backend);
-          fetchModels();
-          ws.close();
-          break;
-        case "error":
-          setLoadError(msg.message);
-          setLoading(null);
-          setLoadProgress(0);
-          setLoadMessage("");
-          ws.close();
-          break;
-      }
-    };
-
-    ws.onerror = () => {
-      setLoadError("Connection failed");
-      setLoading(null);
-    };
+    startDownload(modelId, backend as "mlx" | "hf");
+    setIsOpen(false);
   };
 
-  const modelColor = currentModel ? getModelColor(currentModel) : "var(--text-muted)";
-
-  const HeatIcon = ({ heat }: { heat?: string }) => {
-    if (heat === "Cool") return <Snowflake size={11} className="text-cyan-400" />;
-    if (heat === "Warm") return <Thermometer size={11} className="text-amber-400" />;
-    if (heat === "Hot") return <Flame size={11} className="text-red-400" />;
-    return null;
+  const handleBrowseAll = () => {
+    setIsOpen(false);
+    onBrowseAll?.();
   };
 
-  // ── Dropdown (shared between collapsed and expanded) ──────────────
+  const modelColor = currentModelId ? getModelColor(currentModelId) : "var(--text-muted)";
 
-  const dropdown = isOpen && !loading && (
+  // ── Dropdown ──────────────────────────────────────────────────────
+
+  const dropdown = isOpen && !loadingId && (
     <div
       ref={dropdownRef}
       style={collapsed ? {
@@ -135,39 +101,15 @@ export function ModelSwitcher({ onModelLoaded, collapsed = false }: ModelSwitche
       }}
       className="bg-[var(--bg-tertiary)] border border-[var(--border-default)] rounded-lg shadow-lg overflow-hidden"
     >
-      <div className="px-2.5 py-1.5 text-[10px] text-[var(--text-muted)] uppercase tracking-wider">
-        Recommended
-      </div>
-      {recommended.map((model) => (
-        <button
-          key={model.id}
-          onClick={() => handleSelect(model.id, model.backend)}
-          className="w-full flex items-center gap-2.5 px-2.5 py-2 hover:bg-[var(--bg-surface)] transition-colors duration-[var(--duration-fast)]"
-        >
-          <div
-            className="w-2 h-2 rounded-full shrink-0"
-            style={{ background: getModelColor(model.id) }}
-          />
-          <div className="flex-1 text-left min-w-0">
-            <div className="text-xs text-[var(--text-primary)] flex items-center gap-1.5">
-              {model.name}
-              <span className="text-[10px] px-1 py-px rounded bg-[var(--bg-elevated)] text-[var(--text-tertiary)]">
-                {model.backend === "mlx" ? "MLX" : "HF"}
-              </span>
-              <HeatIcon heat={model.heat} />
-            </div>
-            <div className="text-[10px] text-[var(--text-muted)]">
-              {model.quality} · {model.size}
-            </div>
-          </div>
-          {model.is_loaded && <Check size={14} className="text-[var(--success)] shrink-0" />}
-        </button>
-      ))}
-
-      {cached.length > 0 && (
+      {cached.length === 0 ? (
+        <div className="px-3 py-6 text-center">
+          <div className="text-xs text-[var(--text-secondary)] mb-1">No models yet</div>
+          <div className="text-[10px] text-[var(--text-muted)]">Browse to download one</div>
+        </div>
+      ) : (
         <>
-          <div className="px-2.5 py-1.5 text-[10px] text-[var(--text-muted)] uppercase tracking-wider border-t border-[var(--border-subtle)]">
-            Locally cached
+          <div className="px-2.5 py-1.5 text-[10px] text-[var(--text-muted)] uppercase tracking-wider">
+            Available
           </div>
           {cached.map((model) => (
             <button
@@ -175,14 +117,40 @@ export function ModelSwitcher({ onModelLoaded, collapsed = false }: ModelSwitche
               onClick={() => handleSelect(model.id, model.backend)}
               className="w-full flex items-center gap-2.5 px-2.5 py-2 hover:bg-[var(--bg-surface)] transition-colors duration-[var(--duration-fast)]"
             >
-              <Cpu size={14} className="text-[var(--text-muted)] shrink-0" />
+              <div
+                className="w-2 h-2 rounded-full shrink-0"
+                style={{ background: getModelColor(model.id) }}
+              />
               <div className="flex-1 text-left min-w-0">
-                <div className="text-xs text-[var(--text-secondary)] truncate">{model.name}</div>
+                <div className="text-xs text-[var(--text-primary)] flex items-center gap-1.5 truncate">
+                  <span className="truncate">{model.name}</span>
+                  <span className="text-[10px] px-1 py-px rounded bg-[var(--bg-elevated)] text-[var(--text-tertiary)] shrink-0">
+                    {model.backend === "mlx" ? "MLX" : "HF"}
+                  </span>
+                </div>
+                {(model.quality || model.size_label || model.size) && (
+                  <div className="text-[10px] text-[var(--text-muted)] truncate">
+                    {[model.quality, model.size_label || model.size].filter(Boolean).join(" · ")}
+                  </div>
+                )}
               </div>
               {model.is_loaded && <Check size={14} className="text-[var(--success)] shrink-0" />}
             </button>
           ))}
         </>
+      )}
+
+      {/* Browse all footer */}
+      {onBrowseAll && (
+        <button
+          onClick={handleBrowseAll}
+          className="w-full flex items-center gap-2 px-2.5 py-2.5 border-t border-[var(--border-subtle)] hover:bg-[var(--bg-surface)] transition-colors duration-[var(--duration-fast)]"
+        >
+          <span className="flex-1 text-left text-[11px] text-[var(--text-secondary)] font-medium">
+            Browse all models
+          </span>
+          <ArrowRight size={12} className="text-[var(--text-muted)]" />
+        </button>
       )}
     </div>
   );
@@ -196,16 +164,16 @@ export function ModelSwitcher({ onModelLoaded, collapsed = false }: ModelSwitche
           ref={triggerRef}
           onClick={() => setIsOpen(!isOpen)}
           className="w-9 h-9 flex items-center justify-center rounded-md hover:bg-[var(--bg-surface)] transition-colors duration-[var(--duration-fast)]"
-          title={loading ? `Loading ${loading.split("/").pop()}...` : currentModel ? currentModel.split("/").pop() : "Select model"}
+          title={loadingId ? `Loading ${loadingId.split("/").pop()}...` : currentModelId ? currentModelId.split("/").pop() : "Select model"}
         >
           <div
-            className={loading ? "model-dot-loading" : ""}
+            className={loadingId ? "model-dot-loading" : ""}
             style={{
               width: 12,
               height: 12,
               borderRadius: "50%",
-              background: loading ? "var(--accent)" : modelColor,
-              color: loading ? "var(--accent)" : modelColor,
+              background: loadingId ? "var(--accent)" : modelColor,
+              color: loadingId ? "var(--accent)" : modelColor,
               transition: "background 300ms ease-out",
             }}
           />
@@ -225,22 +193,22 @@ export function ModelSwitcher({ onModelLoaded, collapsed = false }: ModelSwitche
         className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md bg-[var(--bg-surface)] hover:bg-[var(--bg-elevated)] transition-colors duration-[var(--duration-fast)]"
       >
         <div
-          className={loading ? "model-dot-loading" : ""}
+          className={loadingId ? "model-dot-loading" : ""}
           style={{
             width: 8,
             height: 8,
             borderRadius: "50%",
-            background: loading ? "var(--accent)" : modelColor,
-            color: loading ? "var(--accent)" : modelColor,
+            background: loadingId ? "var(--accent)" : modelColor,
+            color: loadingId ? "var(--accent)" : modelColor,
             flexShrink: 0,
             transition: "background 300ms ease-out",
           }}
         />
         <div className="flex-1 text-left min-w-0">
-          {loading ? (
+          {loadingId ? (
             <>
               <div className="text-xs text-[var(--text-primary)] font-medium truncate">
-                {loading.split("/").pop()}
+                {loadingId.split("/").pop()}
               </div>
               <div className="text-[10px] text-[var(--text-tertiary)]">
                 {loadMessage || "Loading..."}
@@ -256,9 +224,9 @@ export function ModelSwitcher({ onModelLoaded, collapsed = false }: ModelSwitche
           ) : (
             <>
               <div className="text-xs text-[var(--text-primary)] font-medium truncate">
-                {currentModel ? currentModel.split("/").pop() : "No model"}
+                {currentModelId ? currentModelId.split("/").pop() : "No model"}
               </div>
-              {currentModel && !loadError && (
+              {currentModelId && !loadError && (
                 <div className="text-[10px] text-[var(--text-tertiary)] flex items-center gap-1">
                   <span>{currentBackend === "mlx" ? "MLX" : "HF"}</span>
                   <span>·</span>
@@ -271,7 +239,7 @@ export function ModelSwitcher({ onModelLoaded, collapsed = false }: ModelSwitche
             </>
           )}
         </div>
-        {loading ? (
+        {loadingId ? (
           <Loader2 size={14} className="text-[var(--accent)] animate-spin" />
         ) : (
           <ChevronDown size={14} className="text-[var(--text-muted)]" />

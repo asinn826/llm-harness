@@ -35,32 +35,39 @@ _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 
 # ── Model registry ──────────────────────────────────────────────────────────
 
-RECOMMENDED_MODELS = [
-    {
-        "name": "Gemma 4 E4B",
-        "id": "google/gemma-4-E4B-it",
-        "size": "~8GB",
-        "heat": "Cool",
-        "quality": "Good quality",
-        "backend": "hf",
-    },
-    {
-        "name": "Qwen 3.5 4B 4-bit",
-        "id": "mlx-community/Qwen3.5-4B-OptiQ-4bit",
-        "size": "~3GB",
-        "heat": "Warm",
-        "quality": "Clean tools",
-        "backend": "mlx",
-    },
-    {
-        "name": "Qwen 3.5 9B 4-bit",
-        "id": "mlx-community/Qwen3.5-9B-MLX-4bit",
-        "size": "~5GB",
-        "heat": "Hot",
-        "quality": "Best quality",
-        "backend": "mlx",
-    },
-]
+def _load_recommended_models() -> list[dict]:
+    """Load the recommended model registry from JSON.
+
+    The source of truth is ui/backend/recommended_models.json — enriched
+    with parameters, quantization, context_window, description, license,
+    tags, hf_url, tool_use_tier, etc. Used by both the CLI picker (which
+    only reads name/id/size_label/heat/quality/backend) and the web UI's
+    Models page (which reads the full schema).
+    """
+    registry_path = Path(__file__).resolve().parent / "ui" / "backend" / "recommended_models.json"
+    try:
+        import json
+        with open(registry_path) as f:
+            entries = json.load(f)
+        # Back-compat: CLI picker expects `size` field; use size_label as fallback.
+        for entry in entries:
+            if "size" not in entry:
+                entry["size"] = entry.get("size_label", "")
+        return entries
+    except (FileNotFoundError, json.JSONDecodeError):
+        # Fallback: minimal hardcoded list so the CLI still works if the
+        # JSON is missing or malformed.
+        return [
+            {"name": "Gemma 4 E4B", "id": "google/gemma-4-E4B-it",
+             "size": "~8GB", "heat": "Cool", "quality": "Good quality", "backend": "hf"},
+            {"name": "Qwen 3.5 4B 4-bit", "id": "mlx-community/Qwen3.5-4B-OptiQ-4bit",
+             "size": "~3GB", "heat": "Warm", "quality": "Clean tools", "backend": "mlx"},
+            {"name": "Qwen 3.5 9B 4-bit", "id": "mlx-community/Qwen3.5-9B-MLX-4bit",
+             "size": "~5GB", "heat": "Hot", "quality": "Best quality", "backend": "mlx"},
+        ]
+
+
+RECOMMENDED_MODELS = _load_recommended_models()
 
 
 def detect_backend(model_id: str) -> str:

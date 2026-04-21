@@ -2,6 +2,7 @@ import { useState, useEffect, type ReactNode } from "react";
 import {
   MessageSquare,
   Columns2,
+  Package,
   Settings,
   Plus,
   PanelLeftClose,
@@ -11,7 +12,7 @@ import { sessions as sessionsApi } from "../lib/api";
 import type { Session } from "../lib/types";
 import { getModelColor } from "../lib/types";
 
-type View = "chat" | "compare" | "settings";
+type View = "chat" | "compare" | "models" | "settings";
 
 interface SidebarProps {
   currentView: View;
@@ -29,6 +30,7 @@ interface SidebarProps {
 const NAV_ITEMS: { view: View; icon: typeof MessageSquare; label: string }[] = [
   { view: "chat", icon: MessageSquare, label: "Chat" },
   { view: "compare", icon: Columns2, label: "Compare" },
+  { view: "models", icon: Package, label: "Models" },
 ];
 
 export function Sidebar({

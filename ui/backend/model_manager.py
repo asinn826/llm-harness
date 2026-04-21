@@ -4,6 +4,7 @@ Wraps main.py's model loading logic into a singleton that the FastAPI
 server can call. Thread-safe — only one model loaded at a time.
 """
 import gc
+import os
 import sys
 import threading
 from dataclasses import dataclass, field
@@ -49,6 +50,102 @@ class LoadProgress:
     message: str = ""
 
 
+# ── Cache introspection helpers ────────────────────────────────────────────
+
+def _hub_cache_dir() -> Path:
+    return Path.home() / ".cache" / "huggingface" / "hub"
+
+
+def _cache_entry_for(model_id: str) -> Path:
+    """Path to the HF cache directory for a given model id."""
+    return _hub_cache_dir() / f"models--{model_id.replace('/', '--')}"
+
+
+def _disk_size_for_cached(model_id: str) -> int:
+    """Total bytes on disk for the cached snapshot of this model."""
+    entry = _cache_entry_for(model_id)
+    snapshots = entry / "snapshots"
+    if not snapshots.is_dir():
+        return 0
+    total = 0
+    for root, _dirs, files in os.walk(snapshots, followlinks=False):
+        for f in files:
+            fp = Path(root) / f
+            try:
+                # Use the resolved file (snapshots are symlinks to blobs)
+                total += fp.stat().st_size
+            except OSError:
+                pass
+    return total
+
+
+def _last_used_for_cached(model_id: str) -> float:
+    """Unix timestamp of most recent access (proxy: snapshot mtime)."""
+    entry = _cache_entry_for(model_id)
+    snapshots = entry / "snapshots"
+    if not snapshots.is_dir():
+        return 0.0
+    try:
+        latest = 0.0
+        for child in snapshots.iterdir():
+            try:
+                mtime = child.stat().st_mtime
+                if mtime > latest:
+                    latest = mtime
+            except OSError:
+                pass
+        return latest
+    except OSError:
+        return 0.0
+
+
+def _format_bytes(n: int) -> str:
+    """Human-readable size label. '3.2 GB' etc."""
+    if n <= 0:
+        return ""
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if n < 1024:
+            return f"{n:.1f} {unit}" if unit != "B" else f"{int(n)} {unit}"
+        n /= 1024
+    return f"{n:.1f} PB"
+
+
+# ── Progress tqdm patch (shared by MLX and HF loaders) ────────────────────
+
+def _make_progress_tqdm(model_id: str, progress_callback, is_cached: bool):
+    """Build a tqdm subclass that reports progress to a callback.
+
+    Used by both _load_hf() and _load_mlx() by monkey-patching
+    huggingface_hub.utils.tqdm.tqdm during model loading. Progress is
+    mapped into the 0.3 → 0.9 range so the caller can reserve 0.0-0.3
+    for setup and 0.9-1.0 for finalization.
+    """
+    import importlib
+    _hf_tqdm_module = importlib.import_module('huggingface_hub.utils.tqdm')
+    _orig_tqdm = _hf_tqdm_module.tqdm
+
+    class _ProgressTqdm(_orig_tqdm):
+        def __init__(self, *args, **kwargs):
+            kwargs['file'] = open(os.devnull, 'w')
+            super().__init__(*args, **kwargs)
+
+        def update(self, n=1):
+            super().update(n)
+            if self.total and progress_callback:
+                pct = self.n / self.total
+                desc = getattr(self, 'desc', None) or ''
+                if 'shard' in desc.lower() or is_cached:
+                    label = f"Loading weights — {pct:.0%}"
+                else:
+                    label = f"Downloading — {pct:.0%}"
+                progress_callback(LoadProgress(
+                    model_id=model_id, progress=0.3 + pct * 0.6,
+                    status="loading", message=label,
+                ))
+
+    return _ProgressTqdm
+
+
 class ModelManager:
     """Manages a single loaded model at a time.
 
@@ -84,16 +181,25 @@ class ModelManager:
                 **m,
                 "is_cached": m["id"] in cached_set,
                 "is_loaded": self._info is not None and self._info.model_id == m["id"],
+                # For recommended that ARE cached, supply disk-based facts too
+                **({"last_used": _last_used_for_cached(m["id"])}
+                   if m["id"] in cached_set else {}),
             })
 
         other_cached = []
         for model_id in cached:
             if model_id not in recommended_ids:
                 backend = detect_backend(model_id)
+                size_bytes = _disk_size_for_cached(model_id)
                 other_cached.append({
                     "id": model_id,
                     "name": model_id.split("/")[-1],
+                    "author": model_id.split("/")[0] if "/" in model_id else "",
                     "backend": backend,
+                    "size_bytes": size_bytes,
+                    "size_label": _format_bytes(size_bytes),
+                    "last_used": _last_used_for_cached(model_id),
+                    "tool_use_tier": "unknown",
                     "is_cached": True,
                     "is_loaded": self._info is not None and self._info.model_id == model_id,
                 })
@@ -154,18 +260,42 @@ class ModelManager:
                 raise
 
     def _load_mlx(self, model_id: str, progress_callback=None):
-        """Load via mlx-lm without CLI spinners."""
-        from mlx_lm import load
-        model, tokenizer = load(model_id)
-        return tokenizer, model
+        """Load via mlx-lm with progress tracking.
+
+        mlx_lm.load() internally calls huggingface_hub.snapshot_download()
+        for the weights. We patch huggingface_hub.utils.tqdm.tqdm with a
+        callback-reporting subclass so the UI can show download + load
+        progress. Same mechanism used by _load_hf.
+        """
+        import importlib
+        from huggingface_hub import try_to_load_from_cache
+
+        is_cached = try_to_load_from_cache(model_id, "config.json") is not None
+
+        if progress_callback:
+            progress_callback(LoadProgress(
+                model_id=model_id, progress=0.05,
+                status="loading",
+                message="Loading from cache..." if is_cached else "Downloading model...",
+            ))
+
+        _hf_tqdm_module = importlib.import_module('huggingface_hub.utils.tqdm')
+        _orig_tqdm = _hf_tqdm_module.tqdm
+        _hf_tqdm_module.tqdm = _make_progress_tqdm(model_id, progress_callback, is_cached)
+
+        try:
+            from mlx_lm import load
+            model, tokenizer = load(model_id)
+            return tokenizer, model
+        finally:
+            _hf_tqdm_module.tqdm = _orig_tqdm
 
     def _load_hf(self, model_id: str, progress_callback=None):
         """Load via HuggingFace transformers with progress tracking.
 
-        Patches HF's tqdm to report download/load progress via callback.
-        Mirrors main.py's load_model_hf but without CLI spinners.
+        Patches HF's tqdm (shared factory with _load_mlx) to report
+        download/load progress via callback.
         """
-        import os
         import logging
         import importlib
         import warnings
@@ -178,37 +308,13 @@ class ModelManager:
 
         token = os.environ.get("HF_TOKEN") or None
 
-        # Check if model is already cached locally
         from huggingface_hub import try_to_load_from_cache
         is_cached = try_to_load_from_cache(model_id, "config.json") is not None
 
-        # Patch HF's tqdm to report progress via callback.
-        # HF uses tqdm for both downloading AND loading checkpoint shards —
-        # we use is_cached to show the right message.
+        _ProgressTqdm = _make_progress_tqdm(model_id, progress_callback, is_cached)
+
         _hf_tqdm_module = importlib.import_module('huggingface_hub.utils.tqdm')
         _orig_hf_tqdm = _hf_tqdm_module.tqdm
-
-        class _ProgressTqdm(_orig_hf_tqdm):
-            def __init__(self, *args, **kwargs):
-                kwargs['file'] = open(os.devnull, 'w')
-                super().__init__(*args, **kwargs)
-
-            def update(self, n=1):
-                super().update(n)
-                if self.total and progress_callback:
-                    pct = self.n / self.total
-                    desc = getattr(self, 'desc', None) or ''
-                    # "Loading checkpoint shards" = loading from disk
-                    # Anything else with a known cache = also loading from disk
-                    if 'shard' in desc.lower() or is_cached:
-                        label = f"Loading weights — {pct:.0%}"
-                    else:
-                        label = f"Downloading — {pct:.0%}"
-                    progress_callback(LoadProgress(
-                        model_id=model_id, progress=0.3 + pct * 0.6,
-                        status="loading", message=label,
-                    ))
-
         _hf_tqdm_module.tqdm = _ProgressTqdm
 
         # Also patch transformers' internal tqdm (for "Loading checkpoint shards")
