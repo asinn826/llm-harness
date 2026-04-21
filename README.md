@@ -19,11 +19,13 @@ A native desktop app with model management, persistent sessions, and side-by-sid
 ```bash
 # Python dependencies
 pip3.11 install -r requirements.txt
-pip3.11 install fastapi 'uvicorn[standard]' websockets
+pip3.11 install -r ui/backend/requirements.txt
 
-# Frontend dependencies
+# Frontend dependencies (includes the Tauri CLI)
 cd ui/frontend && npm install && cd ../..
 ```
+
+If you don't have `python3.11` on your PATH, substitute `python3 -m pip` / `python3` — `ui/dev.sh` auto-detects `python3.11` and falls back to `python3`.
 
 ### Launch
 
@@ -33,6 +35,15 @@ cd ui/frontend && npm install && cd ../..
 ```
 
 The app starts a FastAPI backend on port 8000 and a Tauri native window (or browser at localhost:5173). Load a model from the sidebar dropdown, then start chatting.
+
+### Troubleshooting
+
+- **`python3.11: command not found`** — You don't have 3.11 installed. Either `brew install python@3.11`, or run with plain `python3` (the launcher falls back automatically). Note that the `requirements.txt` comments still say `pip3.11`; substitute `python3 -m pip` if needed.
+- **`ModuleNotFoundError: No module named 'fastapi'`** — Backend deps not installed under the Python version `dev.sh` picked. Run `python3 -m pip install -r ui/backend/requirements.txt` (or `pip3.11 ...` if using 3.11). Easy to miss if you only installed the root `requirements.txt`.
+- **`npm error could not determine executable to run`** after "Launching desktop app..." — The Tauri CLI wasn't installed. Run `npm install` inside `ui/frontend/` again; `@tauri-apps/cli@^2` is a devDependency and should pull in on install.
+- **`Rust not found`** from `check_rust` — Install Rust (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`) or skip the native window with `./ui/dev.sh --browser`.
+- **"Ready. Native window should open shortly." prints, then nothing** — `dev.sh` backgrounds the backend and frontend and prints the banner unconditionally; if either child errors, scroll up — the real failure is above the banner.
+- **Vite spams `http proxy error: /models ECONNREFUSED`** — Something is squatting on :8000 (usually a uvicorn reloader from a previous run that didn't shut down cleanly). `dev.sh` now auto-clears it on launch; to do it manually: `pkill -9 -f 'uvicorn ui.backend.server'` then re-run.
 
 ### Build (.dmg)
 
