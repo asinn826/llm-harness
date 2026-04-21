@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Package, Search, Lock, AlertCircle, Globe } from "lucide-react";
 import { models as modelsApi, prefs as prefsApi } from "../lib/api";
-import type { ModelInfo, HubSearchResult } from "../lib/types";
+import type { ModelInfo, HubSearchResult, ModelUpdateInfo } from "../lib/types";
 import { ModelCard } from "../components/ModelCard";
 import { ModelDetailsDrawer } from "../components/ModelDetailsDrawer";
 import { useDownloads } from "../contexts/DownloadsContext";
@@ -32,6 +32,7 @@ export function ModelsView() {
   const [recommended, setRecommended] = useState<ModelInfo[]>([]);
   const [cached, setCached] = useState<ModelInfo[]>([]);
   const [libLoading, setLibLoading] = useState(true);
+  const [updates, setUpdates] = useState<Record<string, ModelUpdateInfo>>({});
 
   // Hub state
   const [hubEnabled, setHubEnabled] = useState(false);
@@ -64,6 +65,15 @@ export function ModelsView() {
     } finally {
       setLibLoading(false);
     }
+
+    // Fetch update status in the background — don't block render.
+    modelsApi.updates()
+      .then((list) => {
+        const map: Record<string, ModelUpdateInfo> = {};
+        for (const u of list) map[u.id] = u;
+        setUpdates(map);
+      })
+      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -159,6 +169,8 @@ export function ModelsView() {
               loading={libLoading}
               recommended={recommendedSorted}
               cached={cachedSorted}
+              updates={updates}
+              onRefresh={refreshLibrary}
               onOpenDrawer={(m) => openDrawer({
                 modelId: m.id,
                 backend: m.backend,
@@ -211,11 +223,13 @@ export function ModelsView() {
 // ── Library pane ────────────────────────────────────────────────────────
 
 function LibraryPane({
-  loading, recommended, cached, onOpenDrawer,
+  loading, recommended, cached, updates, onRefresh, onOpenDrawer,
 }: {
   loading: boolean;
   recommended: ModelInfo[];
   cached: ModelInfo[];
+  updates: Record<string, ModelUpdateInfo>;
+  onRefresh: () => void;
   onOpenDrawer: (m: ModelInfo) => void;
 }) {
   if (loading) return <SkeletonGrid count={4} />;
@@ -233,7 +247,12 @@ function LibraryPane({
                 if ((e.target as HTMLElement).closest("button, a")) return;
                 onOpenDrawer(m);
               }} style={{ cursor: "pointer" }}>
-                <ModelCard model={m} starred />
+                <ModelCard
+                  model={m}
+                  starred
+                  hasUpdate={updates[m.id]?.has_update === true}
+                  onDeleted={onRefresh}
+                />
               </div>
             ))}
           </Grid>
@@ -247,7 +266,11 @@ function LibraryPane({
                 if ((e.target as HTMLElement).closest("button, a")) return;
                 onOpenDrawer(m);
               }} style={{ cursor: "pointer" }}>
-                <ModelCard model={m} />
+                <ModelCard
+                  model={m}
+                  hasUpdate={updates[m.id]?.has_update === true}
+                  onDeleted={onRefresh}
+                />
               </div>
             ))}
           </Grid>

@@ -406,6 +406,119 @@ async def model_details(
     return data
 
 
+# ── Lifecycle: hardware, cache deletion, update check ──────────────────
+
+@app.get("/system/hardware")
+async def system_hardware():
+    """Memory and platform info — used to compute hardware-fit chips."""
+    import psutil, platform as _pf
+    vm = psutil.virtual_memory()
+    machine = _pf.machine()
+    return {
+        "total_memory_bytes": int(vm.total),
+        "available_memory_bytes": int(vm.available),
+        "platform": _pf.system(),
+        "is_apple_silicon": (_pf.system() == "Darwin" and machine in ("arm64", "aarch64")),
+    }
+
+
+@app.delete("/models/cache/{owner}/{repo}")
+async def delete_cached_model(
+    owner: str = FPath(..., pattern=_HF_ID_RE),
+    repo: str = FPath(..., pattern=_HF_ID_RE),
+    confirm: bool = False,
+):
+    """Remove a model from the HuggingFace cache.
+
+    Refuses if the model is currently loaded (409). Requires confirm=true
+    as a safety check. Validates the target path stays within the HF hub
+    cache directory to guard against path traversal.
+    """
+    if not confirm:
+        raise HTTPException(status_code=400, detail="confirm=true required")
+
+    model_id = f"{owner}/{repo}"
+
+    info = model_manager.current_model
+    if info is not None and info.model_id == model_id:
+        raise HTTPException(status_code=409, detail={"error": "loaded", "unload_hint": True})
+
+    import shutil
+    hub_root = (Path.home() / ".cache" / "huggingface" / "hub").resolve()
+    target = (hub_root / f"models--{owner}--{repo}").resolve()
+
+    # Path traversal guard — target must be a direct child of hub_root
+    try:
+        target.relative_to(hub_root)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid cache path")
+
+    if not target.exists():
+        raise HTTPException(status_code=404, detail=f"Not cached: {model_id}")
+
+    # Measure before delete
+    from ui.backend.model_manager import _disk_size_for_cached
+    freed = _disk_size_for_cached(model_id)
+
+    await asyncio.to_thread(shutil.rmtree, target, ignore_errors=False)
+
+    return {"status": "ok", "freed_bytes": freed}
+
+
+# Per-id update cache (60 min)
+_updates_cache: dict[str, tuple[float, dict]] = {}
+_UPDATES_TTL = 3600.0
+
+
+@app.get("/models/updates")
+async def models_updates():
+    """For each locally cached model, check if a newer commit exists on the Hub.
+
+    Returns a list: [{id, has_update, local_sha, remote_sha}]. Hub errors
+    per-model are swallowed (has_update=false, remote_sha=null).
+    """
+    from main import find_cached_models
+
+    def _local_sha(model_id: str) -> Optional[str]:
+        entry = Path.home() / ".cache" / "huggingface" / "hub" / f"models--{model_id.replace('/', '--')}"
+        ref = entry / "refs" / "main"
+        try:
+            return ref.read_text().strip()
+        except Exception:
+            return None
+
+    async def _remote_sha(model_id: str) -> Optional[str]:
+        now = time.time()
+        cached = _updates_cache.get(model_id)
+        if cached and (now - cached[0]) < _UPDATES_TTL:
+            return cached[1].get("remote_sha")
+
+        def _fetch():
+            from huggingface_hub import HfApi
+            info = HfApi().model_info(model_id)
+            return getattr(info, "sha", None)
+
+        try:
+            sha = await asyncio.to_thread(_fetch)
+            _updates_cache[model_id] = (now, {"remote_sha": sha})
+            return sha
+        except Exception:
+            return None
+
+    results = []
+    for model_id in find_cached_models():
+        local = _local_sha(model_id)
+        remote = await _remote_sha(model_id)
+        has_update = bool(local and remote and local != remote)
+        results.append({
+            "id": model_id,
+            "has_update": has_update,
+            "local_sha": local,
+            "remote_sha": remote,
+        })
+    return results
+
+
 # ── Sessions endpoints ────────────────────────────────────────────────────
 
 class CreateSessionRequest(BaseModel):

@@ -22,6 +22,9 @@ export interface ModelInfo {
   hf_url?: string;
   tool_use_tier?: "verified" | "likely" | "unknown";
   last_used?: number; // unix timestamp
+  /** Older cached model IDs that this one supersedes — used to surface
+   * "newer version available" hints on Recommended cards. */
+  supersedes_cached?: string[];
 }
 
 /** Alias for clarity — the same shape, just a domain marker. */
@@ -64,6 +67,22 @@ export interface ModelDetails {
   model_size_bytes: number;
   last_modified: string | null;
   readme_markdown: string;
+}
+
+/** Hardware info from GET /system/hardware */
+export interface HardwareInfo {
+  total_memory_bytes: number;
+  available_memory_bytes: number;
+  platform: string;
+  is_apple_silicon: boolean;
+}
+
+/** One entry in GET /models/updates response */
+export interface ModelUpdateInfo {
+  id: string;
+  has_update: boolean;
+  local_sha: string | null;
+  remote_sha: string | null;
 }
 
 /** State of an in-flight model load (lives in DownloadsContext). */

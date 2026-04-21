@@ -1,6 +1,14 @@
 /** API client for the FastAPI backend. */
 
-import type { ModelsResponse, Session, Message, HubSearchResult, ModelDetails } from "./types";
+import type {
+  ModelsResponse,
+  Session,
+  Message,
+  HubSearchResult,
+  ModelDetails,
+  HardwareInfo,
+  ModelUpdateInfo,
+} from "./types";
 
 const BASE = "/api";
 
@@ -55,6 +63,24 @@ export const models = {
     const [owner, repo] = modelId.split("/");
     return request<ModelDetails>(`/models/${owner}/${repo}/details`);
   },
+
+  /** Delete a model from the HF cache. Returns freed_bytes. */
+  deleteCache: (modelId: string) => {
+    const [owner, repo] = modelId.split("/");
+    return request<{ status: string; freed_bytes: number }>(
+      `/models/cache/${owner}/${repo}?confirm=true`,
+      { method: "DELETE" }
+    );
+  },
+
+  /** Returns list of cached models + whether each has a newer commit on Hub. */
+  updates: () => request<ModelUpdateInfo[]>("/models/updates"),
+};
+
+// ── System ──────────────────────────────────────────────────────────────
+
+export const system = {
+  hardware: () => request<HardwareInfo>("/system/hardware"),
 };
 
 // ── Preferences ─────────────────────────────────────────────────────────

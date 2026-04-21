@@ -13,6 +13,7 @@
  *   - Error                    → [Retry]     (+ red error text)
  */
 
+import { useState } from "react";
 import {
   Download,
   Check,
@@ -25,27 +26,66 @@ import {
   ShieldCheck,
   HelpCircle,
   Star,
+  MoreHorizontal,
+  Trash2,
+  Copy,
 } from "lucide-react";
 import type { ModelInfo } from "../lib/types";
 import { getModelColor } from "../lib/types";
 import { useDownloads } from "../contexts/DownloadsContext";
+import { HardwareFitChip } from "./HardwareFitChip";
+import { UpdateBadge } from "./UpdateBadge";
+import { ConfirmDialog } from "./ConfirmDialog";
+import { models as modelsApi } from "../lib/api";
 
 interface ModelCardProps {
   model: ModelInfo;
   variant?: "rich" | "compact";
   /** If true, a small "Recommended" star badge renders in the header row. */
   starred?: boolean;
+  /** Whether this model has a newer Hub commit — shows UpdateBadge. */
+  hasUpdate?: boolean;
+  /** Called after a successful cache deletion (parent refetches list). */
+  onDeleted?: () => void;
 }
 
-export function ModelCard({ model, variant = "rich", starred = false }: ModelCardProps) {
+export function ModelCard({ model, variant = "rich", starred = false, hasUpdate = false, onDeleted }: ModelCardProps) {
   const { downloads, currentModelId, startDownload, cancelDownload } = useDownloads();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [deleteDialog, setDeleteDialog] = useState(false);
+  const [unloadDialog, setUnloadDialog] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const dl = downloads[model.id];
   const isActive = currentModelId === model.id;
   const isBusy = dl?.status === "downloading" || dl?.status === "loading";
   const isError = dl?.status === "error";
+  const hasSuperseded = (model.supersedes_cached?.length ?? 0) > 0;
 
   const color = getModelColor(model.id);
+
+  const handleDelete = async () => {
+    setDeleteError(null);
+    try {
+      await modelsApi.deleteCache(model.id);
+      setDeleteDialog(false);
+      onDeleted?.();
+    } catch (e: any) {
+      // 409 when currently loaded
+      const msg = String(e?.message ?? e);
+      if (msg.toLowerCase().includes("loaded") || msg.toLowerCase().includes("unload")) {
+        setDeleteDialog(false);
+        setUnloadDialog(true);
+      } else {
+        setDeleteError(msg);
+      }
+    }
+  };
+
+  const handleCopyId = () => {
+    navigator.clipboard?.writeText(model.id).catch(() => {});
+    setMenuOpen(false);
+  };
 
   if (variant === "compact") {
     return renderCompact({
@@ -94,7 +134,17 @@ export function ModelCard({ model, variant = "rich", starred = false }: ModelCar
         <BackendBadge backend={model.backend} />
         <HeatIcon heat={model.heat} />
         <ToolUseBadge tier={model.tool_use_tier} />
+        <HardwareFitChip model={model} />
         <div style={{ flex: 1 }} />
+        {hasUpdate && !isActive && (
+          <UpdateBadge kind="commit" title="A newer version of this model is available on HuggingFace" onClick={() => startDownload(model.id, model.backend)} />
+        )}
+        {hasSuperseded && !isActive && (
+          <UpdateBadge
+            kind="superseded"
+            title={`A newer curated version is available. You have: ${(model.supersedes_cached || []).join(", ")}`}
+          />
+        )}
         {isActive && (
           <span
             style={{
@@ -106,6 +156,50 @@ export function ModelCard({ model, variant = "rich", starred = false }: ModelCar
           >
             <Check size={10} /> Active
           </span>
+        )}
+        {model.is_cached && (
+          <div style={{ position: "relative" }}>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setMenuOpen(!menuOpen);
+              }}
+              style={iconBtnStyle}
+              title="More"
+            >
+              <MoreHorizontal size={14} />
+            </button>
+            {menuOpen && (
+              <>
+                <div
+                  onClick={() => setMenuOpen(false)}
+                  style={{ position: "fixed", inset: 0, zIndex: 60 }}
+                />
+                <div
+                  style={{
+                    position: "absolute",
+                    top: "100%", right: 0,
+                    marginTop: 4,
+                    minWidth: 180,
+                    background: "var(--bg-tertiary)",
+                    border: "1px solid var(--border-default)",
+                    borderRadius: 6,
+                    overflow: "hidden",
+                    zIndex: 70,
+                    boxShadow: "0 8px 24px rgba(0,0,0,0.4)",
+                  }}
+                >
+                  <MenuItem icon={<Copy size={12} />} label="Copy model ID" onClick={handleCopyId} />
+                  <MenuItem
+                    icon={<Trash2 size={12} />}
+                    label="Delete from cache"
+                    destructive
+                    onClick={() => { setMenuOpen(false); setDeleteDialog(true); }}
+                  />
+                </div>
+              </>
+            )}
+          </div>
         )}
       </div>
 
@@ -147,7 +241,81 @@ export function ModelCard({ model, variant = "rich", starred = false }: ModelCar
         onStart={() => startDownload(model.id, model.backend)}
         onCancel={() => cancelDownload(model.id)}
       />
+
+      {/* Delete confirmation */}
+      {deleteDialog && (
+        <ConfirmDialog
+          title="Remove from cache?"
+          body={
+            <>
+              <strong>{model.name}</strong>
+              {model.size_label ? ` (${model.size_label})` : ""} will be deleted from{" "}
+              <code style={{ fontFamily: "var(--font-mono)", fontSize: 11, padding: "1px 4px", background: "var(--bg-elevated)", borderRadius: 3 }}>
+                ~/.cache/huggingface/hub
+              </code>. You can re-download it later.
+              {deleteError && (
+                <div style={{ marginTop: 10, color: "var(--error)", fontSize: 11 }}>{deleteError}</div>
+              )}
+            </>
+          }
+          confirmLabel="Delete"
+          destructive
+          onConfirm={handleDelete}
+          onCancel={() => { setDeleteDialog(false); setDeleteError(null); }}
+        />
+      )}
+
+      {/* 409: model is loaded — offer to unload */}
+      {unloadDialog && (
+        <ConfirmDialog
+          title="Unload first?"
+          body={
+            <>
+              <strong>{model.name}</strong> is currently active.
+              Unload it before deleting from cache.
+            </>
+          }
+          confirmLabel="Unload"
+          onConfirm={async () => {
+            try {
+              await modelsApi.unload();
+              setUnloadDialog(false);
+              setDeleteDialog(true);
+            } catch (e: any) {
+              setDeleteError(String(e?.message ?? e));
+              setUnloadDialog(false);
+            }
+          }}
+          onCancel={() => setUnloadDialog(false)}
+        />
+      )}
     </div>
+  );
+}
+
+function MenuItem({ icon, label, onClick, destructive = false }: { icon: React.ReactNode; label: string; onClick: () => void; destructive?: boolean }) {
+  return (
+    <button
+      onClick={(e) => { e.stopPropagation(); onClick(); }}
+      style={{
+        width: "100%",
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        padding: "8px 12px",
+        background: "transparent",
+        border: "none",
+        textAlign: "left",
+        color: destructive ? "var(--error)" : "var(--text-secondary)",
+        fontSize: 12,
+        cursor: "pointer",
+      }}
+      onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-surface)")}
+      onMouseLeave={(e) => (e.currentTarget.style.background = "transparent")}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }
 

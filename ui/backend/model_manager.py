@@ -218,12 +218,20 @@ class ModelManager:
         cached_set = set(cached)
         tier_overrides = _load_tier_overrides()
 
+        # Curated supersede resolution: if a recommended entry has
+        # `supersedes: ["old-id", ...]` and any listed id is cached,
+        # the superseder's card should show "Update available" via
+        # the `supersedes_cached` hint.
+
         recommended = []
         for m in RECOMMENDED_MODELS:
+            superseded_ids = [sid for sid in (m.get("supersedes") or []) if sid in cached_set]
             recommended.append({
                 **m,
                 "is_cached": m["id"] in cached_set,
                 "is_loaded": self._info is not None and self._info.model_id == m["id"],
+                # Hint: the user has an older family member cached
+                "supersedes_cached": superseded_ids,
                 # For recommended that ARE cached, supply disk-based facts too
                 **({"last_used": _last_used_for_cached(m["id"])}
                    if m["id"] in cached_set else {}),

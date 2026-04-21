@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { AlertCircle, Download } from "lucide-react";
 import { ChatMessage, ToolCallApproval } from "../components/ChatMessage";
 import { ChatInput } from "../components/ChatInput";
 import { useWebSocket } from "../hooks/useWebSocket";
-import { sessions as sessionsApi } from "../lib/api";
-import type { Message, WSServerMessage } from "../lib/types";
+import { sessions as sessionsApi, models as modelsApi } from "../lib/api";
+import type { Message, WSServerMessage, ModelInfo } from "../lib/types";
+import { useDownloads } from "../contexts/DownloadsContext";
 
 interface DisplayMessage {
   id: string;
@@ -34,8 +36,38 @@ export function ChatView({ sessionId, onSessionCreated, onTitleUpdated, currentM
   const [isGenerating, setIsGenerating] = useState(false);
   const [pendingToolCall, setPendingToolCall] = useState<PendingToolCall | null>(null);
   const [streamingContent, setStreamingContent] = useState("");
+  const [availableModelIds, setAvailableModelIds] = useState<Set<string>>(new Set());
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamingRef = useRef("");
+
+  const { startDownload } = useDownloads();
+
+  // Fetch the list of available model IDs to detect deleted-model sessions
+  useEffect(() => {
+    modelsApi.list().then((data) => {
+      const ids = new Set<string>();
+      data.recommended.forEach((m) => { if (m.is_cached) ids.add(m.id); });
+      data.cached.forEach((m) => ids.add(m.id));
+      setAvailableModelIds(ids);
+    }).catch(() => {});
+  }, [sessionId, currentModelId]);
+
+  // Find the session's most recent assistant model_id
+  const sessionModelId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.role === "assistant" && m.modelId) return m.modelId;
+    }
+    return null;
+  }, [messages]);
+
+  // Banner condition: session has a model_id, but it's not available and
+  // we're not already using it (defensive: only show if we've actually
+  // fetched the model list, i.e. the set has entries).
+  const showDeletedBanner = sessionModelId
+    && availableModelIds.size > 0
+    && !availableModelIds.has(sessionModelId)
+    && currentModelId !== sessionModelId;
 
   // Load messages for existing session
   useEffect(() => {
@@ -189,6 +221,44 @@ export function ChatView({ sessionId, onSessionCreated, onTitleUpdated, currentM
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, height: "100%" }}>
+      {/* Deleted-model banner */}
+      {showDeletedBanner && sessionModelId && (
+        <div style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 10,
+          padding: "10px 20px",
+          background: "var(--warning-muted)",
+          borderBottom: "1px solid var(--border-subtle)",
+          fontSize: 12,
+          flexShrink: 0,
+        }}>
+          <AlertCircle size={14} style={{ color: "var(--warning)", flexShrink: 0 }} />
+          <span style={{ flex: 1, color: "var(--text-secondary)" }}>
+            <strong style={{ color: "var(--text-primary)" }}>{sessionModelId.split("/").pop()}</strong> was removed from cache. Transcript is read-only.
+          </span>
+          <button
+            onClick={() => startDownload(sessionModelId, "mlx")}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              padding: "4px 10px",
+              background: "var(--accent)",
+              color: "white",
+              border: "none",
+              borderRadius: 4,
+              fontSize: 11,
+              fontWeight: 500,
+              cursor: "pointer",
+              flexShrink: 0,
+            }}
+          >
+            <Download size={11} /> Redownload
+          </button>
+        </div>
+      )}
+
       {/* Scrollable messages */}
       <div style={{ flex: 1, overflowY: "auto" }}>
         {!hasMessages && (
