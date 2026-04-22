@@ -45,13 +45,23 @@ The app starts a FastAPI backend on port 8000 and a Tauri native window (or brow
 - **"Ready. Native window should open shortly." prints, then nothing** — `dev.sh` backgrounds the backend and frontend and prints the banner unconditionally; if either child errors, scroll up — the real failure is above the banner.
 - **Vite spams `http proxy error: /models ECONNREFUSED`** — Something is squatting on :8000 (usually a uvicorn reloader from a previous run that didn't shut down cleanly). `dev.sh` now auto-clears it on launch; to do it manually: `pkill -9 -f 'uvicorn ui.backend.server'` then re-run.
 
-### Build (.dmg)
+### Build standalone .app
+
+One command bundles Python + FastAPI + MLX + the React frontend into a self-contained `LLM Harness.app` that needs no Python or Node install:
 
 ```bash
-cd ui/frontend && npx tauri build
+./ui/build.sh            # build into src-tauri/target/release/bundle/
+./ui/build.sh --install  # also copy to /Applications
 ```
 
-Output: `ui/frontend/src-tauri/target/release/bundle/dmg/`
+Final size: ~93 MB. MLX-only — the HF backend is stripped to keep the binary small. Pipeline:
+
+1. `vite build` the frontend
+2. PyInstaller bundles the Python backend as a Tauri sidecar binary
+3. `tauri build` produces the `.app` (and a `.dmg` next to it)
+4. `codesign --sign -` with ad-hoc signature (avoids Gatekeeper warning on your own machine)
+
+First launch takes ~7s — PyInstaller unpacks once to a temp dir, subsequent launches are fast.
 
 ### macOS permissions
 
