@@ -11,7 +11,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-import torch
+try:
+    import torch  # type: ignore
+    _HAS_TORCH = True
+except ImportError:
+    torch = None  # type: ignore
+    _HAS_TORCH = False
+
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -354,6 +360,12 @@ class ModelManager:
         Patches HF's tqdm (shared factory with _load_mlx) to report
         download/load progress via callback.
         """
+        if not _HAS_TORCH:
+            raise RuntimeError(
+                "HuggingFace backend requires PyTorch, which is not bundled "
+                "in this standalone build. Use an MLX-backend model instead."
+            )
+
         import logging
         import importlib
         import warnings
@@ -428,7 +440,7 @@ class ModelManager:
         self._tokenizer = None
         self._info = None
         gc.collect()
-        if torch.backends.mps.is_available():
+        if _HAS_TORCH and torch.backends.mps.is_available():
             torch.mps.empty_cache()
 
     def generate(self, conversation: list) -> str:

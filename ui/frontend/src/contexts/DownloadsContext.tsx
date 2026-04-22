@@ -29,7 +29,7 @@ import {
   type ReactNode,
 } from "react";
 import type { DownloadState } from "../lib/types";
-import { models as modelsApi } from "../lib/api";
+import { models as modelsApi, wsUrl } from "../lib/api";
 
 export type DownloadEvent =
   | { type: "completed"; modelId: string; backend: string }
@@ -112,8 +112,7 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
         },
       }));
 
-      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-      const ws = new WebSocket(`${protocol}//${window.location.host}/ws/models/load`);
+      const ws = new WebSocket(wsUrl("/ws/models/load"));
       socketsRef.current.set(modelId, ws);
 
       ws.onopen = () => {

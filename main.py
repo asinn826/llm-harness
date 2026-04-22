@@ -13,22 +13,36 @@ import argparse
 import logging
 from dotenv import load_dotenv
 load_dotenv()
-import torch
+
+try:
+    import torch  # type: ignore
+    _HAS_TORCH = True
+except ImportError:
+    torch = None  # type: ignore
+    _HAS_TORCH = False
 
 from harness import build_system_prompt, run_conversation_turn
 from tools import TOOLS
 import sys
 
-from rich.markdown import Markdown
-from cli import (
-    console, print_banner, print_assistant, print_tool_call, print_tool_result,
-    confirm_tool, get_user_input, thinking_spinner, expand_last_tool_result,
-)
+# rich/cli are needed only for the CLI entry — optional in the packaged
+# standalone backend (which doesn't call main()).
+try:
+    from rich.markdown import Markdown
+    from cli import (
+        console, print_banner, print_assistant, print_tool_call, print_tool_result,
+        confirm_tool, get_user_input, thinking_spinner, expand_last_tool_result,
+    )
+    _HAS_CLI = True
+except ImportError:
+    _HAS_CLI = False
 
 import gc
 from pathlib import Path
 
-_USE_MLX = torch.backends.mps.is_available()
+# Apple Silicon? MLX is the native path. If torch isn't bundled (standalone
+# build), assume yes — the .app only ships on Apple Silicon anyway.
+_USE_MLX = torch.backends.mps.is_available() if _HAS_TORCH else True
 
 _SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
 

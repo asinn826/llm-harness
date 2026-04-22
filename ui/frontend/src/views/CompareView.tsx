@@ -41,7 +41,7 @@ export function CompareView() {
     (msg: WSServerMessage) => {
       switch (msg.type) {
         case "model_start": {
-          const idx = "index" in msg ? msg.index : -1;
+          const idx = ("index" in msg ? (msg as any).index : -1) as number;
           streamingRefs.current[idx] = "";
           setPanels((prev) =>
             prev.map((p, i) => (i === idx ? { ...p, status: "generating", streamingContent: "" } : p))
@@ -50,7 +50,7 @@ export function CompareView() {
         }
 
         case "token": {
-          const idx = "index" in msg ? msg.index : -1;
+          const idx = ("index" in msg ? (msg as any).index : -1) as number;
           streamingRefs.current[idx] = (streamingRefs.current[idx] || "") + msg.data;
           const content = streamingRefs.current[idx];
           setPanels((prev) =>
@@ -60,7 +60,7 @@ export function CompareView() {
         }
 
         case "tool_call": {
-          const idx = "index" in msg ? msg.index : -1;
+          const idx = ("index" in msg ? (msg as any).index : -1) as number;
           // For compare, auto-approve read-only, display for others
           if (streamingRefs.current[idx]) {
             setPanels((prev) =>
@@ -83,7 +83,7 @@ export function CompareView() {
         }
 
         case "tool_result": {
-          const idx = "index" in msg ? msg.index : -1;
+          const idx = ("index" in msg ? (msg as any).index : -1) as number;
           setPanels((prev) =>
             prev.map((p, i) =>
               i === idx
@@ -101,7 +101,7 @@ export function CompareView() {
         }
 
         case "model_done": {
-          const idx = "index" in msg ? msg.index : -1;
+          const idx = ("index" in msg ? (msg as any).index : -1) as number;
           const finalContent = streamingRefs.current[idx] || "";
           setPanels((prev) =>
             prev.map((p, i) =>

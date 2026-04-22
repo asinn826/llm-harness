@@ -10,7 +10,22 @@ import type {
   ModelUpdateInfo,
 } from "./types";
 
-const BASE = "/api";
+// In dev mode, Vite proxies /api and /ws to localhost:8000.
+// In the Tauri bundle, the frontend is served from the app itself
+// (tauri://localhost), so we point directly at the sidecar on 8765.
+const BASE = import.meta.env.DEV
+  ? "/api"
+  : "http://127.0.0.1:8765";
+
+/** Build a WebSocket URL for a given backend path.
+ *  Works both in dev (Vite proxy) and in the Tauri bundle. */
+export function wsUrl(path: string): string {
+  if (import.meta.env.DEV) {
+    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    return `${protocol}//${window.location.host}${path}`;
+  }
+  return `ws://127.0.0.1:8765${path}`;
+}
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {

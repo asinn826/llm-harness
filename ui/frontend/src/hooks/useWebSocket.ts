@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { WSServerMessage, WSClientMessage } from "../lib/types";
+import { wsUrl } from "../lib/api";
 
 type ConnectionState = "connecting" | "open" | "closed" | "error";
 
@@ -36,8 +37,7 @@ export function useWebSocket({ path, onMessage, autoConnect = true }: UseWebSock
       return;
     }
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${protocol}//${window.location.host}${path}`;
+    const url = wsUrl(path);
 
     setState("connecting");
 

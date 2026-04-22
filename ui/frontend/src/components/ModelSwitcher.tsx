@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { ChevronDown, Loader2, Cpu, Check, ArrowRight } from "lucide-react";
+import { ChevronDown, Loader2, Check, ArrowRight } from "lucide-react";
 import { models as modelsApi } from "../lib/api";
 import type { ModelInfo } from "../lib/types";
 import { getModelColor } from "../lib/types";

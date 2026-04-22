@@ -14,10 +14,6 @@ import {
   Check,
   Loader2,
   Lock,
-  HardDrive,
-  Heart,
-  TrendingUp,
-  Calendar,
 } from "lucide-react";
 import { models as modelsApi } from "../lib/api";
 import type { ModelDetails } from "../lib/types";

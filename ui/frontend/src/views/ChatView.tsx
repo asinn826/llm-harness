@@ -4,7 +4,7 @@ import { ChatMessage, ToolCallApproval } from "../components/ChatMessage";
 import { ChatInput } from "../components/ChatInput";
 import { useWebSocket } from "../hooks/useWebSocket";
 import { sessions as sessionsApi, models as modelsApi } from "../lib/api";
-import type { Message, WSServerMessage, ModelInfo } from "../lib/types";
+import type { WSServerMessage } from "../lib/types";
 import { useDownloads } from "../contexts/DownloadsContext";
 
 interface DisplayMessage {

@@ -17,7 +17,6 @@ import { useState } from "react";
 import {
   Download,
   Check,
-  Loader2,
   X as XIcon,
   ExternalLink,
   Flame,
