@@ -15,6 +15,7 @@ export function ModelSwitcher({ onBrowseAll, collapsed = false }: ModelSwitcherP
 
   const [isOpen, setIsOpen] = useState(false);
   const [cached, setCached] = useState<ModelInfo[]>([]);
+  const [collapsedDropdownTop, setCollapsedDropdownTop] = useState(80);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
 
@@ -28,26 +29,23 @@ export function ModelSwitcher({ onBrowseAll, collapsed = false }: ModelSwitcherP
   const loadMessage = activeDownload?.message ?? "";
   const loadError = Object.values(downloads).find((d) => d.status === "error")?.error ?? null;
 
-  const fetchModels = async () => {
-    try {
-      const data = await modelsApi.list();
+  useEffect(() => {
+    let active = true;
+    modelsApi.list().then((data) => {
+      if (!active) return;
       // Sidebar is pure quick-switch: union of recommended + cached,
       // but only models that are cached locally. Recommended models that
       // aren't cached live on the Models page.
       const quick = [
-        ...data.recommended.filter((m) => m.is_cached),
+        ...data.recommended.filter((model) => model.is_cached),
         ...data.cached,
       ];
-      // De-dup by id while preserving order
       const seen = new Set<string>();
-      setCached(quick.filter((m) => (seen.has(m.id) ? false : seen.add(m.id))));
-    } catch {
-      // silently fail
-    }
-  };
-
-  useEffect(() => {
-    fetchModels();
+      setCached(quick.filter((model) => (
+        seen.has(model.id) ? false : Boolean(seen.add(model.id))
+      )));
+    }).catch(() => {});
+    return () => { active = false; };
   }, [currentModelId]); // refresh list whenever the active model changes
 
   useEffect(() => {
@@ -59,10 +57,6 @@ export function ModelSwitcher({ onBrowseAll, collapsed = false }: ModelSwitcherP
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [loadingId]);
-
-  useEffect(() => {
-    setIsOpen(false);
-  }, [collapsed]);
 
   const handleSelect = (modelId: string, backend: string) => {
     if (modelId === currentModelId) {
@@ -79,6 +73,12 @@ export function ModelSwitcher({ onBrowseAll, collapsed = false }: ModelSwitcherP
   };
 
   const modelColor = currentModelId ? getModelColor(currentModelId) : "var(--text-muted)";
+  const handleToggle = () => {
+    if (collapsed && !isOpen) {
+      setCollapsedDropdownTop(triggerRef.current?.getBoundingClientRect().top ?? 80);
+    }
+    setIsOpen((open) => !open);
+  };
 
   // ── Dropdown ──────────────────────────────────────────────────────
 
@@ -88,7 +88,7 @@ export function ModelSwitcher({ onBrowseAll, collapsed = false }: ModelSwitcherP
       style={collapsed ? {
         position: "fixed",
         left: 52,
-        top: triggerRef.current?.getBoundingClientRect().top ?? 80,
+        top: collapsedDropdownTop,
         zIndex: 100,
         width: 260,
       } : {
@@ -162,7 +162,7 @@ export function ModelSwitcher({ onBrowseAll, collapsed = false }: ModelSwitcherP
       <div className="relative flex justify-center py-1">
         <button
           ref={triggerRef}
-          onClick={() => setIsOpen(!isOpen)}
+          onClick={handleToggle}
           className="w-9 h-9 flex items-center justify-center rounded-md hover:bg-[var(--bg-surface)] transition-colors duration-[var(--duration-fast)]"
           title={loadingId ? `Loading ${loadingId.split("/").pop()}...` : currentModelId ? currentModelId.split("/").pop() : "Select model"}
         >
@@ -189,7 +189,7 @@ export function ModelSwitcher({ onBrowseAll, collapsed = false }: ModelSwitcherP
     <div className="relative px-3 py-2 border-b border-[var(--border-subtle)]">
       <button
         ref={triggerRef}
-        onClick={() => setIsOpen(!isOpen)}
+        onClick={handleToggle}
         className="w-full flex items-center gap-2 px-2.5 py-2 rounded-md bg-[var(--bg-surface)] hover:bg-[var(--bg-elevated)] transition-colors duration-[var(--duration-fast)]"
       >
         <div

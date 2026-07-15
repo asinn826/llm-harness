@@ -10,27 +10,62 @@ import time
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .model_manager import model_manager, ModelInfo
+from .model_installer import install_model
+from .model_preflight import ModelPreflightError, preflight_model
 from .session_store import (
+    create_project, get_project, list_projects,
     create_session, get_session, list_sessions, delete_session,
     update_session_title, add_message, get_messages, search_sessions,
-    fork_session, get_conversation_list,
+    fork_session, get_conversation_list, get_comparison_models,
+    set_comparison_models,
 )
 
 app = FastAPI(title="LLM Harness", version="0.1.0")
 
+_TRUSTED_ORIGINS = frozenset({
+    # Vite development server (hostname and loopback variants).
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    # Tauri's production webview origins across supported platforms.
+    "tauri://localhost",
+    "http://tauri.localhost",
+    "https://tauri.localhost",
+})
+
+_COMPARISON_SYSTEM_PROMPT = (
+    "You are participating in a side-by-side model evaluation. "
+    "Answer the user's request directly and independently. "
+    "Do not call tools or refer to the evaluation harness."
+)
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Tauri webview and dev server
+    allow_origins=sorted(_TRUSTED_ORIGINS),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+async def _accept_trusted_websocket(ws: WebSocket) -> bool:
+    """Accept a WebSocket only from this app's browser surfaces.
+
+    Native clients and CLI tools commonly omit ``Origin`` and remain allowed.
+    Browser clients always send it, so an unrecognized value is rejected before
+    the endpoint reads a message or performs any work.
+    """
+    origin = ws.headers.get("origin")
+    if origin is not None and origin not in _TRUSTED_ORIGINS:
+        await ws.close(code=1008, reason="Origin not allowed")
+        return False
+    await ws.accept()
+    return True
 
 
 def _strip_think_tags(text: str) -> str:
@@ -94,6 +129,13 @@ async def _generate_session_title(session_id: str, user_message: str, ws: WebSoc
 class LoadModelRequest(BaseModel):
     model_id: str
     backend: Optional[str] = None
+    revision: Optional[str] = None
+
+
+class PreflightModelRequest(BaseModel):
+    model_id: str
+    backend: Optional[str] = None
+    revision: Optional[str] = None
 
 
 class DownloadModelRequest(BaseModel):
@@ -105,13 +147,34 @@ async def list_models():
     return model_manager.list_models()
 
 
+@app.post("/models/preflight")
+async def model_preflight(req: PreflightModelRequest):
+    try:
+        return await asyncio.to_thread(
+            preflight_model,
+            req.model_id,
+            backend=req.backend,
+            revision=req.revision,
+        )
+    except ModelPreflightError as error:
+        raise HTTPException(
+            status_code=error.http_status,
+            detail=error.to_dict(),
+        ) from error
+
+
 @app.post("/models/load")
 async def load_model(req: LoadModelRequest):
     try:
+        revision_kwargs = {"revision": req.revision} if req.revision else {}
         info = await asyncio.to_thread(
-            model_manager.load_model, req.model_id, req.backend
+            model_manager.load_model, req.model_id, req.backend, **revision_kwargs
         )
-        return {"status": "ok", "model": {"model_id": info.model_id, "backend": info.backend}}
+        return {"status": "ok", "model": {
+            "model_id": info.model_id,
+            "backend": info.backend,
+            "revision": info.revision,
+        }}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -120,18 +183,20 @@ async def load_model(req: LoadModelRequest):
 async def ws_load_model(ws: WebSocket):
     """Load a model with progress streaming.
 
-    Client sends: {"model_id": "...", "backend": "..."}
+    Client sends: {"model_id": "...", "backend": "...", "revision": "..."}
     Server sends:
         {"type": "progress", "progress": 0.3, "message": "Loading tokenizer..."}
         {"type": "done", "model_id": "...", "backend": "..."}
         {"type": "error", "message": "..."}
     """
-    await ws.accept()
+    if not await _accept_trusted_websocket(ws):
+        return
     try:
         raw = await ws.receive_text()
         msg = json.loads(raw)
         model_id = msg["model_id"]
         backend = msg.get("backend")
+        revision = msg.get("revision")
 
         loop = asyncio.get_event_loop()
 
@@ -142,21 +207,97 @@ async def ws_load_model(ws: WebSocket):
                     "progress": p.progress,
                     "status": p.status,
                     "message": p.message,
+                    "model_id": model_id,
+                    "revision": revision,
                 }),
                 loop,
             )
 
+        revision_kwargs = {"revision": revision} if revision else {}
         info = await asyncio.to_thread(
-            model_manager.load_model, model_id, backend, progress_callback
+            model_manager.load_model,
+            model_id,
+            backend,
+            progress_callback,
+            **revision_kwargs,
         )
         await ws.send_json({
             "type": "done",
             "model_id": info.model_id,
             "backend": info.backend,
+            "revision": info.revision,
         })
     except Exception as e:
         try:
-            await ws.send_json({"type": "error", "message": str(e)})
+            await ws.send_json({
+                "type": "error",
+                "message": str(e),
+                "model_id": locals().get("model_id"),
+                "revision": locals().get("revision"),
+            })
+        except Exception:
+            pass
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
+
+
+@app.websocket("/ws/models/install")
+async def ws_install_model(ws: WebSocket):
+    """Install a preflighted model revision without loading it into memory."""
+    if not await _accept_trusted_websocket(ws):
+        return
+    model_id = None
+    backend = None
+    revision = None
+    try:
+        raw = await ws.receive_text()
+        msg = json.loads(raw)
+        model_id = msg["model_id"]
+        backend = msg["backend"]
+        revision = msg.get("revision")
+        if not revision:
+            raise RuntimeError("An immutable revision is required. Run preflight first.")
+
+        loop = asyncio.get_event_loop()
+
+        def progress_callback(progress):
+            asyncio.run_coroutine_threadsafe(
+                ws.send_json({
+                    "type": "progress",
+                    "progress": progress.progress,
+                    "status": progress.status,
+                    "message": progress.message,
+                    "model_id": model_id,
+                    "revision": revision,
+                }),
+                loop,
+            )
+
+        result = await asyncio.to_thread(
+            install_model,
+            model_id,
+            backend,
+            revision,
+            progress_callback,
+        )
+        await ws.send_json({
+            "type": "done",
+            "model_id": model_id,
+            "backend": backend,
+            "revision": revision,
+            "cache_status": result.get("cache_status"),
+        })
+    except Exception as error:
+        try:
+            await ws.send_json({
+                "type": "error",
+                "message": str(error),
+                "model_id": model_id,
+                "revision": revision,
+            })
         except Exception:
             pass
     finally:
@@ -181,6 +322,7 @@ async def current_model():
         "loaded": True,
         "model_id": info.model_id,
         "backend": info.backend,
+        "revision": info.revision,
         "status": info.status,
     }
 
@@ -267,13 +409,17 @@ async def hub_search(
     def _do_search():
         from huggingface_hub import HfApi
         api = HfApi()
+        hub_sort = {
+            "lastModified": "last_modified",
+            "trending": "trending_score",
+        }.get(sort, sort)
         hub_filter = None
         if backend == "mlx":
             hub_filter = "mlx"  # tag filter
         kwargs = dict(
             pipeline_tag="text-generation",
             limit=limit,
-            sort=sort,
+            sort=hub_sort,
         )
         if q:
             kwargs["search"] = q
@@ -327,51 +473,63 @@ async def hub_search(
 
 
 # Per-model details (owner + repo path params — validated against regex)
-_details_cache: dict[str, tuple[float, dict]] = {}
+_details_cache: dict[tuple[str, Optional[str]], tuple[float, dict]] = {}
 _DETAILS_TTL = 600.0
+
+
+def _preferred_weight_size(siblings) -> int:
+    """Size one runnable weight family without counting alternate formats."""
+    for suffix in (".safetensors", ".npz", ".bin", ".gguf"):
+        matching = [
+            sibling for sibling in (siblings or [])
+            if str(getattr(sibling, "rfilename", "") or "").lower().endswith(suffix)
+        ]
+        if matching:
+            return sum(int(getattr(sibling, "size", 0) or 0) for sibling in matching)
+    return 0
 
 
 @app.get("/models/{owner}/{repo}/details")
 async def model_details(
     owner: str = FPath(..., pattern=_HF_ID_RE),
     repo: str = FPath(..., pattern=_HF_ID_RE),
+    revision: Optional[str] = Query(None, max_length=200),
 ):
     """Detailed info for a single Hub model: stats, sibling sizes, README."""
     model_id = f"{owner}/{repo}"
 
     now = time.time()
-    cached = _details_cache.get(model_id)
+    cache_key = (model_id, revision)
+    cached = _details_cache.get(cache_key)
     if cached and (now - cached[0]) < _DETAILS_TTL:
         return cached[1]
 
     def _fetch():
-        from huggingface_hub import HfApi, hf_hub_download
+        from huggingface_hub import HfApi
         import os as _os
         token = _os.environ.get("HF_TOKEN") or None
         api = HfApi()
-        info = api.model_info(model_id, files_metadata=True, token=token)
+        info = api.model_info(
+            model_id, revision=revision, files_metadata=True, token=token
+        )
 
-        # Sum weight file sizes
-        size = 0
-        for s in getattr(info, "siblings", []) or []:
-            fname = getattr(s, "rfilename", "") or ""
-            if fname.endswith((".safetensors", ".bin", ".gguf", ".npz")):
-                size += getattr(s, "size", 0) or 0
+        size = _preferred_weight_size(getattr(info, "siblings", []) or [])
 
-        # README via hf_hub_download (cached) with raw-URL fallback
+        # Fetch the model card without writing a metadata-only Hub cache entry.
         readme = ""
         try:
-            readme_path = hf_hub_download(model_id, "README.md", token=token)
-            with open(readme_path, encoding="utf-8") as f:
-                readme = f.read()
+            import requests as _requests
+            resolved = getattr(info, "sha", None) or revision or "main"
+            headers = {"Authorization": f"Bearer {token}"} if token else {}
+            response = _requests.get(
+                f"https://huggingface.co/{model_id}/raw/{resolved}/README.md",
+                headers=headers,
+                timeout=10,
+            )
+            response.raise_for_status()
+            readme = response.text
         except Exception:
-            try:
-                import urllib.request as _req
-                url = f"https://huggingface.co/{model_id}/raw/main/README.md"
-                with _req.urlopen(url, timeout=10) as resp:
-                    readme = resp.read().decode("utf-8", errors="replace")
-            except Exception:
-                readme = ""
+            readme = ""
         if len(readme) > 8192:
             readme = readme[:8192] + "\n\n… (truncated)"
 
@@ -394,6 +552,7 @@ async def model_details(
             "pipeline_tag": getattr(info, "pipeline_tag", None),
             "model_size_bytes": size,
             "last_modified": last_mod_str,
+            "resolved_revision": getattr(info, "sha", None),
             "readme_markdown": readme,
         }
 
@@ -402,7 +561,7 @@ async def model_details(
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Could not fetch model details: {e}")
 
-    _details_cache[model_id] = (now, data)
+    _details_cache[cache_key] = (now, data)
     return data
 
 
@@ -519,11 +678,23 @@ async def models_updates():
     return results
 
 
-# ── Sessions endpoints ────────────────────────────────────────────────────
+# ── Projects and sessions endpoints ──────────────────────────────────────
+
+class CreateProjectRequest(BaseModel):
+    name: str
+
+
+class ComparisonModelRequest(BaseModel):
+    model_id: str
+    backend: Optional[str] = None
+    revision: Optional[str] = None
+
 
 class CreateSessionRequest(BaseModel):
     title: str = "New session"
     is_compare: bool = False
+    project_id: Optional[str] = None
+    models: list[ComparisonModelRequest] = Field(default_factory=list)
 
 
 class UpdateSessionRequest(BaseModel):
@@ -534,14 +705,54 @@ class ForkSessionRequest(BaseModel):
     from_position: int
 
 
+@app.get("/projects")
+async def api_list_projects():
+    return list_projects()
+
+
+@app.post("/projects")
+async def api_create_project(req: CreateProjectRequest):
+    try:
+        return create_project(req.name)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/projects/{project_id}")
+async def api_get_project(project_id: str):
+    project = get_project(project_id)
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
+
+
 @app.get("/sessions")
-async def api_list_sessions(limit: int = 50, offset: int = 0):
-    return list_sessions(limit=limit, offset=offset)
+async def api_list_sessions(
+    limit: int = 50,
+    offset: int = 0,
+    project_id: Optional[str] = None,
+    is_compare: Optional[bool] = None,
+):
+    return list_sessions(
+        limit=limit,
+        offset=offset,
+        project_id=project_id,
+        is_compare=is_compare,
+    )
 
 
 @app.post("/sessions")
 async def api_create_session(req: CreateSessionRequest):
-    return create_session(title=req.title, is_compare=req.is_compare)
+    try:
+        return create_session(
+            title=req.title,
+            is_compare=req.is_compare,
+            project_id=req.project_id,
+            models=[model.model_dump() for model in req.models],
+        )
+    except ValueError as e:
+        status_code = 404 if "not found" in str(e).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(e))
 
 
 @app.get("/sessions/search")
@@ -600,7 +811,8 @@ async def ws_chat(ws: WebSocket):
         {"type": "done", "response": "..."}
         {"type": "error", "message": "..."}
     """
-    await ws.accept()
+    if not await _accept_trusted_websocket(ws):
+        return
 
     try:
         while True:
@@ -842,17 +1054,16 @@ async def ws_compare(ws: WebSocket):
     """Side-by-side model comparison over WebSocket.
 
     Client sends:
-        {"type": "message", "content": "...", "models": ["model_id_1", "model_id_2"], "session_id": "..."}
+        {"type": "message", "content": "...", "models": [{"model_id": "...", "backend": "hf"}], "session_id": "..."}
 
     Server sends (per model):
         {"type": "model_start", "model_id": "...", "index": 0}
         {"type": "token", "data": "...", "model_id": "...", "index": 0}
-        {"type": "tool_call", "tool": "...", "args": {...}, "model_id": "...", "index": 0, "needs_confirmation": bool}
-        {"type": "tool_result", "result": "...", "model_id": "...", "index": 0}
         {"type": "model_done", "model_id": "...", "index": 0, "response": "...", "tokens": N, "time_ms": N}
         {"type": "compare_done", "session_id": "..."}
     """
-    await ws.accept()
+    if not await _accept_trusted_websocket(ws):
+        return
 
     try:
         while True:
@@ -872,170 +1083,198 @@ async def ws_compare(ws: WebSocket):
 
 
 async def _handle_compare_message(ws: WebSocket, msg: dict):
-    """Run the same prompt against multiple models sequentially."""
-    content = msg["content"]
-    model_ids = msg.get("models", [])
-    session_id = msg.get("session_id")
+    """Run one turn against a comparison's stable, ordered model lineup."""
+    import threading
 
-    if not model_ids:
+    content = msg["content"]
+    raw_models = msg.get("models", [])
+    model_specs = []
+    for model in raw_models:
+        if isinstance(model, str):
+            model_specs.append({"model_id": model})
+        elif isinstance(model, dict):
+            model_specs.append({
+                "model_id": model.get("model_id") or model.get("id"),
+                "backend": model.get("backend"),
+                "revision": model.get("revision"),
+            })
+        else:
+            await ws.send_json({"type": "error", "message": "Invalid comparison model"})
+            return
+    session_id = msg.get("session_id")
+    project_id = msg.get("project_id")
+
+    # A comparison owns its lineup. The client supplies it once at creation;
+    # reopening the thread always restores the persisted order.
+    if not session_id:
+        if not model_specs:
+            await ws.send_json({"type": "error", "message": "No models specified"})
+            return
+        try:
+            session = create_session(
+                title=f"Compare: {content[:30]}",
+                is_compare=True,
+                project_id=project_id,
+                models=model_specs,
+            )
+        except ValueError as e:
+            await ws.send_json({"type": "error", "message": str(e)})
+            return
+        session_id = session["id"]
+        await ws.send_json({
+            "type": "session_created",
+            "session_id": session_id,
+            "project_id": session["project_id"],
+            "title": session["title"],
+        })
+    else:
+        session = get_session(session_id)
+        if not session:
+            await ws.send_json({"type": "error", "message": "Comparison not found"})
+            return
+        if not session["is_compare"]:
+            await ws.send_json({"type": "error", "message": "Session is not a comparison"})
+            return
+
+        saved_lineup = get_comparison_models(session_id)
+        if not saved_lineup and model_specs:
+            try:
+                set_comparison_models(session_id, model_specs)
+            except ValueError as e:
+                await ws.send_json({"type": "error", "message": str(e)})
+                return
+
+    lineup = get_comparison_models(session_id)
+    if not lineup:
         await ws.send_json({"type": "error", "message": "No models specified"})
         return
-
-    # Create compare session
-    if not session_id:
-        session = create_session(title=f"Compare: {content[:30]}", is_compare=True)
-        session_id = session["id"]
-        await ws.send_json({"type": "session_created", "session_id": session_id})
+    model_ids = [model["model_id"] for model in lineup]
+    lineup_by_id = {model["model_id"]: model for model in lineup}
 
     add_message(session_id, "user", content)
 
-    from tools import TOOLS
-    from harness import _trim_stale_tool_results
-
-    shared_tool_results = {}  # cache tool results to share across models
+    def _conversation_for_model(model_id: str) -> list[dict]:
+        """Return shared user turns plus only this model's prior responses."""
+        conversation = []
+        failure_prefixes = (
+            "Error loading model:",
+            "Error generating response:",
+            "Model returned empty response",
+        )
+        for message in get_messages(session_id):
+            if message["role"] == "user":
+                conversation.append({"role": "user", "content": message["content"]})
+            elif (
+                message["role"] == "assistant"
+                and message["model_id"] == model_id
+                and not message["tool_name"]
+                and not message["content"].startswith(failure_prefixes)
+            ):
+                conversation.append({"role": "assistant", "content": message["content"]})
+        return conversation
 
     for idx, model_id in enumerate(model_ids):
         await ws.send_json({
             "type": "model_start",
+            "session_id": session_id,
             "model_id": model_id,
             "index": idx,
         })
 
         # Load model
         try:
-            backend = None
-            await asyncio.to_thread(model_manager.load_model, model_id, backend)
+            backend = lineup_by_id[model_id].get("backend")
+            revision = lineup_by_id[model_id].get("revision")
+            revision_kwargs = {"revision": revision} if revision else {}
+            await asyncio.to_thread(
+                model_manager.load_model, model_id, backend, **revision_kwargs
+            )
         except Exception as e:
+            response = f"Error loading model: {e}"
+            add_message(
+                session_id,
+                "assistant",
+                response,
+                model_id=model_id,
+                tokens_generated=0,
+                generation_time_ms=0,
+            )
             await ws.send_json({
                 "type": "model_done",
+                "session_id": session_id,
                 "model_id": model_id,
                 "index": idx,
-                "response": f"Error loading model: {e}",
+                "response": response,
                 "tokens": 0,
                 "time_ms": 0,
             })
             continue
 
-        # Build conversation for this model (shared user message, independent responses)
-        conversation = [{"role": "user", "content": content}]
+        conversation = _conversation_for_model(model_id)
+        chunks = []
+        error_box = []
+        start_time = time.time()
 
-        for iteration in range(10):
-            _trim_stale_tool_results(conversation)
+        loop = asyncio.get_event_loop()
+        token_queue = asyncio.Queue()
 
-            chunks = []
-            start_time = time.time()
+        def _generate_thread(mgr=model_manager, conv=conversation,
+                             q=token_queue, c=chunks, errors=error_box, lp=loop):
+            try:
+                for token in mgr.generate(conv, system_prompt=_COMPARISON_SYSTEM_PROMPT):
+                    c.append(token)
+                    asyncio.run_coroutine_threadsafe(q.put(token), lp)
+            except Exception as e:
+                errors.append(e)
+            finally:
+                asyncio.run_coroutine_threadsafe(q.put(None), lp)
 
-            loop = asyncio.get_event_loop()
-            token_queue = asyncio.Queue()
-            done_event = asyncio.Event()
-
-            def _generate_thread(mgr=model_manager, conv=conversation,
-                                 q=token_queue, c=chunks, evt=done_event, lp=loop):
-                try:
-                    for token in mgr.generate(conv):
-                        c.append(token)
-                        asyncio.run_coroutine_threadsafe(q.put(token), lp)
-                finally:
-                    evt.set()
-
-            async def _stream(q=token_queue, evt=done_event, mid=model_id, i=idx):
-                while not evt.is_set() or not q.empty():
-                    try:
-                        token = await asyncio.wait_for(q.get(), timeout=0.1)
-                        await ws.send_json({"type": "token", "data": token, "model_id": mid, "index": i})
-                    except asyncio.TimeoutError:
-                        continue
-
-            import threading
-            gen_thread = threading.Thread(target=_generate_thread, daemon=True)
-            gen_thread.start()
-            await _stream()
-            gen_thread.join(timeout=5)
-
-            elapsed_ms = int((time.time() - start_time) * 1000)
-            response = _strip_think_tags(''.join(chunks).strip())
-            token_count = len(chunks)
-
-            tool_call = parse_tool_call(response)
-
-            if tool_call is None:
-                conversation.append({"role": "assistant", "content": response})
-                add_message(session_id, "assistant", response,
-                           model_id=model_id,
-                           tokens_generated=token_count,
-                           generation_time_ms=elapsed_ms)
+        async def _stream(q=token_queue, mid=model_id, i=idx):
+            while True:
+                token = await q.get()
+                if token is None:
+                    break
                 await ws.send_json({
-                    "type": "model_done",
-                    "model_id": model_id,
-                    "index": idx,
-                    "response": response,
-                    "tokens": token_count,
-                    "time_ms": elapsed_ms,
+                    "type": "token",
+                    "session_id": session_id,
+                    "data": token,
+                    "model_id": mid,
+                    "index": i,
                 })
-                break
 
-            # Tool call — shared execution
-            conversation.append({"role": "assistant", "content": response})
-            tool_name = tool_call.get("tool", "")
-            args = {k: v for k, v in tool_call.get("args", {}).items() if v is not None}
-            needs_confirmation = tool_name in TOOLS and getattr(TOOLS[tool_name], "needs_confirmation", True)
+        gen_thread = threading.Thread(target=_generate_thread, daemon=True)
+        gen_thread.start()
+        await _stream()
+        gen_thread.join(timeout=10)
 
-            await ws.send_json({
-                "type": "tool_call",
-                "tool": tool_name,
-                "args": args,
-                "model_id": model_id,
-                "index": idx,
-                "needs_confirmation": needs_confirmation,
-            })
+        elapsed_ms = int((time.time() - start_time) * 1000)
+        response = _strip_think_tags(''.join(chunks).strip())
+        token_count = len(chunks)
 
-            # Check shared cache
-            cache_key = f"{tool_name}:{json.dumps(args, sort_keys=True)}"
-            if cache_key in shared_tool_results:
-                result = shared_tool_results[cache_key]
-            elif needs_confirmation:
-                # Wait for approval
-                try:
-                    raw = await asyncio.wait_for(ws.receive_text(), timeout=300)
-                    client_msg = json.loads(raw)
-                    approved = client_msg.get("approved", False) if client_msg["type"] == "tool_response" else False
-                except (asyncio.TimeoutError, WebSocketDisconnect):
-                    approved = False
+        if error_box:
+            response = f"Error generating response: {error_box[0]}"
+            token_count = 0
+        elif not response:
+            response = "Model returned empty response"
+            token_count = 0
 
-                if tool_name not in TOOLS:
-                    result = f"Error: unknown tool '{tool_name}'"
-                elif isinstance(approved, str):
-                    result = f"User feedback: {approved}"
-                elif not approved:
-                    result = "Tool call denied by user."
-                else:
-                    try:
-                        result = await asyncio.to_thread(TOOLS[tool_name], **args)
-                        result = str(result)
-                    except Exception as e:
-                        result = f"Error: {e}"
-                shared_tool_results[cache_key] = result
-            else:
-                # Read-only — auto execute
-                if tool_name not in TOOLS:
-                    result = f"Error: unknown tool '{tool_name}'"
-                else:
-                    try:
-                        result = await asyncio.to_thread(TOOLS[tool_name], **args)
-                        result = str(result)
-                    except Exception as e:
-                        result = f"Error: {e}"
-                shared_tool_results[cache_key] = result
-
-            await ws.send_json({
-                "type": "tool_result",
-                "result": result,
-                "tool": tool_name,
-                "model_id": model_id,
-                "index": idx,
-            })
-            conversation.append({"role": "tool", "content": result})
-            chunks = []  # reset for next iteration
+        add_message(
+            session_id,
+            "assistant",
+            response,
+            model_id=model_id,
+            tokens_generated=token_count,
+            generation_time_ms=elapsed_ms,
+        )
+        await ws.send_json({
+            "type": "model_done",
+            "session_id": session_id,
+            "model_id": model_id,
+            "index": idx,
+            "response": response,
+            "tokens": token_count,
+            "time_ms": elapsed_ms,
+        })
 
     await ws.send_json({"type": "compare_done", "session_id": session_id})
 
@@ -1101,6 +1340,18 @@ class SaveKeyRequest(BaseModel):
     value: str
 
 
+class RevealKeyRequest(BaseModel):
+    key: str
+
+
+def _mask_secret(value: str) -> str:
+    if not value:
+        return ""
+    if len(value) > 10:
+        return value[:4] + "•" * (len(value) - 8) + value[-4:]
+    return "•" * len(value)
+
+
 @app.get("/settings/keys")
 async def get_api_keys():
     """Return current API key values (masked for display)."""
@@ -1108,23 +1359,42 @@ async def get_api_keys():
     result = {}
     for key in _ALLOWED_KEYS:
         val = raw.get(key, "")
-        if val:
-            # Show first 4 and last 4 chars, mask the rest
-            if len(val) > 10:
-                result[key] = val[:4] + "•" * (len(val) - 8) + val[-4:]
-            else:
-                result[key] = "•" * len(val)
-        else:
-            result[key] = ""
+        result[key] = _mask_secret(val)
     return result
+
+
+@app.post("/settings/keys/reveal")
+async def reveal_api_key(req: RevealKeyRequest, request: Request, response: Response):
+    """Return one secret only after an explicit request from an app surface."""
+    origin = request.headers.get("origin")
+    if origin not in _TRUSTED_ORIGINS:
+        raise HTTPException(status_code=403, detail="Origin not allowed")
+    if req.key not in _ALLOWED_KEYS:
+        raise HTTPException(status_code=400, detail=f"Unknown key: {req.key}")
+
+    response.headers["Cache-Control"] = "no-store, private, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return {"key": req.key, "value": _read_env().get(req.key, "")}
 
 
 @app.post("/settings/keys")
 async def save_api_key(req: SaveKeyRequest):
     if req.key not in _ALLOWED_KEYS:
         raise HTTPException(status_code=400, detail=f"Unknown key: {req.key}")
+    current = _read_env().get(req.key, "")
+    if "•" in req.value:
+        if req.value == _mask_secret(current):
+            return {
+                "status": "ok",
+                "unchanged": True,
+                "masked": _mask_secret(current),
+            }
+        raise HTTPException(
+            status_code=400,
+            detail="Masked key values cannot be saved. Enter a new token or leave the existing value unchanged.",
+        )
     _write_env({req.key: req.value})
-    return {"status": "ok"}
+    return {"status": "ok", "masked": _mask_secret(req.value)}
 
 
 # Small JSON-backed preference store for non-secret app settings.

@@ -37,19 +37,8 @@ export function ChatInput({ onSend, disabled, placeholder = "Message..." }: Chat
   }, [value]);
 
   return (
-    <div style={{ padding: "12px 24px", borderTop: "1px solid var(--border-subtle)", width: "100%" }}>
-      <div
-        style={{
-          display: "flex",
-          alignItems: "flex-end",
-          gap: 8,
-          background: "var(--bg-surface)",
-          borderRadius: 8,
-          border: "1px solid var(--border-subtle)",
-          padding: "8px 12px",
-          width: "100%",
-        }}
-      >
+    <div className="composer-shell">
+      <div className="composer">
         <textarea
           ref={textareaRef}
           value={value}

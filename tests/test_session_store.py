@@ -4,6 +4,7 @@ Uses a temporary database for each test to ensure isolation.
 """
 import json
 import os
+import sqlite3
 import pytest
 from pathlib import Path
 from unittest.mock import patch
@@ -39,6 +40,87 @@ def test_create_compare_session(clean_db):
     store = clean_db
     session = store.create_session(title="Compare test", is_compare=True)
     assert session["is_compare"] == 1
+
+
+def test_init_db_creates_default_project_and_backfills_legacy_sessions(clean_db):
+    store = clean_db
+
+    # Recreate the minimal pre-project schema to exercise the in-place migration.
+    if _TEST_DB.exists():
+        _TEST_DB.unlink()
+    conn = sqlite3.connect(_TEST_DB)
+    conn.executescript("""
+        CREATE TABLE sessions (
+            id TEXT PRIMARY KEY,
+            title TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            is_compare INTEGER DEFAULT 0
+        );
+        INSERT INTO sessions
+            (id, title, created_at, updated_at, is_compare)
+        VALUES
+            ('legacy', 'Legacy comparison', '2026-01-01', '2026-01-01', 1);
+    """)
+    conn.commit()
+    conn.close()
+
+    store.init_db()
+
+    projects = store.list_projects()
+    assert len(projects) == 1
+    assert projects[0]["id"] == store.DEFAULT_PROJECT_ID
+    assert projects[0]["name"] == "Imported conversations"
+    assert projects[0]["is_default"] == 1
+
+    migrated = store.get_session("legacy")
+    assert migrated["project_id"] == store.DEFAULT_PROJECT_ID
+
+
+def test_create_project_and_project_scoped_session(clean_db):
+    store = clean_db
+    project = store.create_project("Local coding models")
+    session = store.create_session(
+        title="Compare code completion",
+        is_compare=True,
+        project_id=project["id"],
+    )
+
+    assert store.get_project(project["id"])["name"] == "Local coding models"
+    assert session["project_id"] == project["id"]
+    assert store.list_sessions(project_id=project["id"])[0]["id"] == session["id"]
+    assert store.list_sessions(project_id=store.DEFAULT_PROJECT_ID) == []
+
+
+def test_list_sessions_can_filter_comparisons(clean_db):
+    store = clean_db
+    store.create_session(title="Legacy chat", is_compare=False)
+    comparison = store.create_session(title="Model comparison", is_compare=True)
+
+    comparisons = store.list_sessions(is_compare=True)
+    chats = store.list_sessions(is_compare=False)
+
+    assert [s["id"] for s in comparisons] == [comparison["id"]]
+    assert [s["title"] for s in chats] == ["Legacy chat"]
+
+
+def test_comparison_models_are_ordered_and_attached_to_session(clean_db):
+    store = clean_db
+    session = store.create_session(title="Lineup", is_compare=True)
+
+    store.set_comparison_models(session["id"], [
+        {"model_id": "org/model-b", "backend": "hf", "revision": "b" * 40},
+        {"model_id": "org/model-a", "backend": "mlx", "revision": "a" * 40},
+    ])
+
+    lineup = store.get_comparison_models(session["id"])
+    assert [m["model_id"] for m in lineup] == ["org/model-b", "org/model-a"]
+    assert lineup[0]["position"] == 0
+    assert lineup[1]["backend"] == "mlx"
+
+    restored = store.get_session(session["id"])
+    assert restored["models"] == ["org/model-b", "org/model-a"]
+    assert restored["comparison_models"] == lineup
 
 
 def test_get_session(clean_db):

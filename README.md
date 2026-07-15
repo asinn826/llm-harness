@@ -1,12 +1,20 @@
-# llm-harness
+# LLM Harness
 
-"We have claude code at home!"
+A local, comparison-first workbench for running freely downloadable Hugging Face language models side by side.
 
-Claude code at home: 
+The desktop product is organized around projects and durable comparison threads. Add two or three compatible models, resolve each Hub revision to an immutable commit, install the runnable artifacts, send one shared prompt, and compare the persisted outcomes in aligned columns.
+
+Current product principles:
+
+- Comparison is the default workflow; general agent chat is legacy functionality.
+- Hugging Face models are checked for access, runtime support, weight format, exact download size, local cache completeness, and memory fit before installation.
+- Model revisions are pinned to commit SHAs through install, execution, and restored history.
+- Comparisons run sequentially with a shared tool-free prompt so local accelerator limits do not compromise the experiment.
+- Projects own durable multi-turn comparison history and fixed ordered lineups.
 
 ## Desktop App (UI)
 
-A native desktop app with model management, persistent sessions, and side-by-side model comparison.
+A native desktop app with Hugging Face discovery, preflighted model installation, project-scoped history, and side-by-side comparison.
 
 ### Prerequisites
 
@@ -34,7 +42,16 @@ If you don't have `python3.11` on your PATH, substitute `python3 -m pip` / `pyth
 ./ui/dev.sh --browser      # fallback: opens in your browser
 ```
 
-The app starts a FastAPI backend on port 8000 and a Tauri native window (or browser at localhost:5173). Load a model from the sidebar dropdown, then start chatting.
+The app starts a FastAPI backend on port 8000 and a Tauri native window (or browser at localhost:5173). Start a comparison, add models from the local library or Hub, and run a shared prompt once at least two pinned models are ready.
+
+### Comparison workflow
+
+1. Select or create a project.
+2. Start a comparison and choose **Browse Hugging Face models**.
+3. Open a model to run preflight. You can choose `main`, a tag, or a commit; the harness records the resolved commit SHA.
+4. Select **Install & add**. Installation downloads only the selected runnable weight family and does not allocate the model into memory.
+5. Add a second or third model, return to the comparison, and send the shared prompt.
+6. Reopen the comparison later to continue with the same fixed lineup and per-model conversation histories.
 
 ### Troubleshooting
 
@@ -74,133 +91,57 @@ See [ui/README.md](ui/README.md) for architecture details, API reference, and pr
 
 ---
 
-## CLI
+## Model compatibility
 
-The original terminal interface — still fully functional alongside the desktop app.
+LLM Harness supports compatible text-generation repositories with causal-language-model weights. Preflight blocks unsupported tasks, GGUF-only repositories, custom remote code, missing local runtimes, and models that will not fit the machine. It does not claim universal Hugging Face compatibility.
 
-```bash
-pip3.11 install -r requirements.txt
-python3.11 main.py                                                  # interactive model picker
-python3.11 main.py --model google/gemma-4-E4B-it --no-mlx          # skip picker, load directly
-```
+The curated starters are deliberately small, public, Apache-2.0 models hosted on Hugging Face and converted for MLX:
 
-Start without `--model` to get an interactive picker with recommended models and any you've already downloaded. Switch models mid-session with `/model`.
+| Model | Runtime | Weight download | Purpose |
+|---|---|---:|---|
+| `mlx-community/Qwen2.5-0.5B-Instruct-4bit` | MLX | ~265 MB | Fast default with strong instruction following |
+| `mlx-community/SmolLM2-360M-Instruct` | MLX | ~690 MB | Lightweight second opinion |
+| `mlx-community/SmolLM2-1.7B-Instruct` | MLX | ~3.2 GB | Higher-capacity comparison candidate |
 
-| Model | Size | Engine | Heat | Tool calling | Speed |
-|---|---|---|---|---|---|
-| Gemma 4 E4B | 4B | `--no-mlx` | 🟢 Cool | Good (parser helps) | Slower |
-| Qwen 3.5 4B 4-bit | 4B | mlx-lm | 🟡 Warm | Clean | Fast |
-| Qwen 3.5 9B 4-bit | 9B | mlx-lm | 🔴 Hot | Best | Fast |
+Catalog entries are discovery shortcuts, not version locks. Every selected model is resolved and persisted at an immutable Hub commit before a comparison starts.
 
-### Gemma 4 setup
+## Hugging Face access
 
-Gemma 4 requires the HuggingFace backend (`--no-mlx`), Python 3.10+, and extra dependencies:
+Public models need no account. For a gated model, accept its terms on Hugging Face and add `HF_TOKEN` in Settings or in a local `.env` file:
 
-```bash
-pip3.11 install torch accelerate torchvision pillow
-pip3.11 install git+https://github.com/huggingface/transformers.git
-python3.11 main.py --model google/gemma-4-E4B-it --no-mlx
-```
-
-## HuggingFace token
-
-A token is optional for public models but required for gated ones (e.g. Llama). To use one, create a `.env` file in this directory:
-
-```
+```text
 HF_TOKEN=hf_...
 ```
 
-Get a token at huggingface.co/settings/tokens. For gated models, you also need to accept the model's terms on its HuggingFace page.
+The product shows access failures during preflight, before installation begins.
 
-## API keys and permissions
+## Legacy CLI
 
-Most tools work out of the box with no setup. A few need API keys or macOS permissions:
-
-| Tool | Requirement | How to set up |
-|---|---|---|
-| Web search | `TAVILY_API_KEY` | Free tier at [tavily.com](https://tavily.com). Add `TAVILY_API_KEY=tvly-...` to `.env` |
-| Weather | None | Uses [Open-Meteo](https://open-meteo.com) (free, no key needed) |
-| GIF search | None | Uses Tenor (key is built in) |
-| iMessage read | Full Disk Access | System Settings → Privacy & Security → Full Disk Access → enable for Terminal |
-| iMessage send | None | Uses AppleScript via Messages.app (works automatically) |
-| Calendar read | Full Disk Access | Same as iMessage read — enable once, covers both |
-| Calendar write | None | Uses AppleScript via Calendar.app |
-
-### .env file
-
-Create a `.env` file in the project directory for any keys you need:
-
-```
-HF_TOKEN=hf_...              # optional — only for gated models (Llama, etc.)
-TAVILY_API_KEY=tvly-...      # optional — only for web_search tool
-```
-
-Everything else works without any configuration.
-
-## Choosing a model
-
-Tested on a MacBook Pro with 36GB unified memory. Picking a model is a tradeoff between how well it follows instructions, how fast it responds, and how hot your laptop gets.
-
-### Recommended models
-
-**🟢 Google Gemma 4 E4B — best for everyday use**
-- 4 billion parameters, instruction tuned by Google
-- Runs cool — your laptop stays comfortable even after many turns
-- Good at reasoning and understanding what you want
-- Occasionally formats tool calls oddly, but the harness handles it
-- Slower responses (runs on the HF backend, not the fast mlx engine)
-- `python3.11 main.py --model google/gemma-4-E4B-it --no-mlx`
-
-**🟡 Qwen 3.5 4B — good middle ground**
-- 4 billion parameters (quantized to 4-bit), instruction tuned by Alibaba
-- Moderate heat — warmer than Gemma, cooler than the 9B
-- Clean, reliable tool call formatting — fewer parser workarounds needed
-- Good for simple tasks (1-2 tool calls), may stall on complex multi-step chains
-- `python3.11 main.py --model mlx-community/Qwen3.5-4B-OptiQ-4bit`
-
-**🔴 Qwen 3.5 9B — best quality, runs hot**
-- 9 billion parameters (quantized to 4-bit), instruction tuned by Alibaba
-- Best at following instructions and chaining multiple tools together
-- Handles 3-4 step chains reliably (e.g. read calendar → compose summary → send message)
-- Runs hot — your fan will kick in after sustained use
-- `python3.11 main.py --model mlx-community/Qwen3.5-9B-MLX-4bit`
-
-### Why some models run hotter
-
-Models marked mlx-lm use Apple's MLX framework, which compiles optimized GPU kernels for Apple Silicon. This makes inference 3-5x faster but pushes the chip harder — more speed means more heat. Models with `--no-mlx` use a more general-purpose engine (HuggingFace transformers) that's slower but gives the GPU more breathing room.
-
-### MLX vs `--no-mlx`: which should I use?
-
-- **Use mlx-lm (the default)** for `mlx-community/` quantized models. Faster responses, but more heat.
-- **Use `--no-mlx`** for models that mlx-lm doesn't support yet (like Gemma 4), or when you want cooler operation at the cost of slower responses.
-- You **cannot** mix them: `mlx-community/` models only work with mlx-lm, and some models (Gemma 4) only work with `--no-mlx`.
-
-> **Note**: Full-precision (fp16) models 9B+ don't fit in 36GB memory via `--no-mlx`. Use quantized `mlx-community` models for anything above 4B.
-
-## Chain-of-thought
-
-Chain-of-thought (thinking mode) is disabled by default. For the current tool-use workload — short commands, message sending, lookups — it adds latency with no benefit.
-
-If you expand the harness to handle more complex tasks (multi-step reasoning, coding, math), re-enable it by changing `enable_thinking=False` to `True` in `make_model_fn_hf` in `main.py`. Only models that explicitly support the `enable_thinking` flag (e.g. Gemma 4) will use it; others fall back gracefully.
-
-## Python version
-
-The HuggingFace backend requires Python 3.10+. mlx-lm works on 3.9+. If you're on the system Python (3.9), install a newer version:
+The original tool-enabled terminal agent remains available for compatibility:
 
 ```bash
-brew install python@3.11
+python3.11 main.py
 ```
 
-Then run with `python3.11` and `pip3.11`.
+It is maintenance-mode functionality, not the product direction. General agent chat, iMessage/calendar actions, tool calling, and chain-of-thought controls are intentionally outside the comparison-first desktop workflow.
+
+## Verification
+
+```bash
+python3.11 -m pytest -q
+cd ui/frontend
+npm run lint
+npm run build
+```
 
 ## Structure
 
-| File | Purpose |
+| Path | Purpose |
 |---|---|
-| `tools.py` | What the model can do (shell, files, calculator, web, iMessage, calendar) |
-| `harness.py` | The generation + tool-call loop + system prompt |
-| `cli.py` | Terminal UI (raw input, Ctrl+O overlay, streaming, Markdown rendering) |
-| `main.py` | Entry point (model loading, streaming, MLX/HF backend selection) |
-| `ui/backend/` | FastAPI server wrapping harness.py (REST + WebSocket) |
-| `ui/frontend/` | React + TypeScript + Tailwind desktop app (Tauri) |
-| `ui/dev.sh` | Dev launcher (backend + frontend with hot reload) |
+| `ui/backend/model_preflight.py` | Hub revision, access, compatibility, artifact, cache, and fit checks |
+| `ui/backend/model_installer.py` | Exact-revision, install-only Hub downloads |
+| `ui/backend/session_store.py` | Projects, comparison lineups, turns, outcomes, and migrations |
+| `ui/backend/server.py` | Local REST and WebSocket product API |
+| `ui/frontend/src/views/CompareView.tsx` | Side-by-side comparison and restored history |
+| `ui/frontend/src/views/ModelsView.tsx` | Installed library and Hugging Face discovery |
+| `main.py`, `harness.py`, `cli.py`, `tools.py` | Legacy terminal agent stack |

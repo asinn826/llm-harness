@@ -13,20 +13,36 @@ interface UseWebSocketOptions {
   onMessage: (msg: WSServerMessage) => void;
   /** Auto-connect on mount (default: true) */
   autoConnect?: boolean;
+  /** Called when an established connection drops while reconnecting. */
+  onDisconnect?: () => void;
 }
 
 const RECONNECT_DELAY = 1000;
 const MAX_RECONNECT_DELAY = 10000;
 
-export function useWebSocket({ path, onMessage, autoConnect = true }: UseWebSocketOptions) {
+export function useWebSocket({
+  path,
+  onMessage,
+  autoConnect = true,
+  onDisconnect,
+}: UseWebSocketOptions) {
   const wsRef = useRef<WebSocket | null>(null);
   const onMessageRef = useRef(onMessage);
-  onMessageRef.current = onMessage;
+  const onDisconnectRef = useRef(onDisconnect);
 
   const [state, setState] = useState<ConnectionState>("closed");
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectDelay = useRef(RECONNECT_DELAY);
   const shouldReconnect = useRef(true);
+  const connectRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    onMessageRef.current = onMessage;
+  }, [onMessage]);
+
+  useEffect(() => {
+    onDisconnectRef.current = onDisconnect;
+  }, [onDisconnect]);
 
   const connect = useCallback(() => {
     // Don't connect if already open or connecting
@@ -43,8 +59,10 @@ export function useWebSocket({ path, onMessage, autoConnect = true }: UseWebSock
 
     try {
       const ws = new WebSocket(url);
+      let didOpen = false;
 
       ws.onopen = () => {
+        didOpen = true;
         setState("open");
         reconnectDelay.current = RECONNECT_DELAY; // reset on successful connect
       };
@@ -54,8 +72,9 @@ export function useWebSocket({ path, onMessage, autoConnect = true }: UseWebSock
         wsRef.current = null;
         // Auto-reconnect
         if (shouldReconnect.current) {
+          if (didOpen) onDisconnectRef.current?.();
           reconnectTimer.current = setTimeout(() => {
-            connect();
+            connectRef.current();
           }, reconnectDelay.current);
           // Exponential backoff, capped
           reconnectDelay.current = Math.min(
@@ -85,6 +104,10 @@ export function useWebSocket({ path, onMessage, autoConnect = true }: UseWebSock
     }
   }, [path]);
 
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
+
   const disconnect = useCallback(() => {
     shouldReconnect.current = false;
     if (reconnectTimer.current) {
@@ -102,11 +125,15 @@ export function useWebSocket({ path, onMessage, autoConnect = true }: UseWebSock
   }, []);
 
   useEffect(() => {
+    let active = true;
     if (autoConnect) {
       shouldReconnect.current = true;
-      connect();
+      queueMicrotask(() => {
+        if (active) connect();
+      });
     }
     return () => {
+      active = false;
       disconnect();
     };
   }, [autoConnect, connect, disconnect]);

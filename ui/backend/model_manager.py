@@ -44,6 +44,7 @@ from main import (
 class ModelInfo:
     model_id: str
     backend: str  # "mlx" or "hf"
+    revision: Optional[str] = None  # immutable Hub commit selected by preflight
     status: str = "ready"  # "loading", "ready", "error"
     error: Optional[str] = None
 
@@ -266,10 +267,11 @@ class ModelManager:
             "cached": other_cached,
             "current": self._info.model_id if self._info else None,
             "current_backend": self._info.backend if self._info else None,
+            "current_revision": self._info.revision if self._info else None,
         }
 
     def load_model(self, model_id: str, backend: Optional[str] = None,
-                    progress_callback=None) -> ModelInfo:
+                    progress_callback=None, revision: Optional[str] = None) -> ModelInfo:
         """Load a model, unloading the current one if needed.
 
         progress_callback: optional callable(LoadProgress) called during loading.
@@ -279,24 +281,39 @@ class ModelManager:
                 backend = detect_backend(model_id)
 
             # Already loaded?
-            if self._info and self._info.model_id == model_id and self._info.status == "ready":
+            if (
+                self._info
+                and self._info.model_id == model_id
+                and self._info.backend == backend
+                and self._info.revision == revision
+                and self._info.status == "ready"
+            ):
                 return self._info
 
             # Unload current
             self._unload_internal()
 
-            self._info = ModelInfo(model_id=model_id, backend=backend, status="loading")
+            self._info = ModelInfo(
+                model_id=model_id,
+                backend=backend,
+                revision=revision,
+                status="loading",
+            )
             if progress_callback:
                 progress_callback(LoadProgress(model_id=model_id, progress=0.0, status="loading",
                                                message=f"Loading {model_id}..."))
 
             try:
                 if backend == "mlx":
-                    tokenizer, model = self._load_mlx(model_id, progress_callback)
+                    tokenizer, model = self._load_mlx(
+                        model_id, progress_callback, revision=revision
+                    )
                     self._tokenizer = tokenizer
                     self._model = model
                 else:
-                    processor, model = self._load_hf(model_id, progress_callback)
+                    processor, model = self._load_hf(
+                        model_id, progress_callback, revision=revision
+                    )
                     self._tokenizer = processor
                     self._model = model
 
@@ -323,7 +340,8 @@ class ModelManager:
                                                    status="error", message=str(e)))
                 raise
 
-    def _load_mlx(self, model_id: str, progress_callback=None):
+    def _load_mlx(self, model_id: str, progress_callback=None,
+                  revision: Optional[str] = None):
         """Load via mlx-lm with progress tracking.
 
         mlx_lm.load() internally calls huggingface_hub.snapshot_download()
@@ -334,7 +352,10 @@ class ModelManager:
         import importlib
         from huggingface_hub import try_to_load_from_cache
 
-        is_cached = try_to_load_from_cache(model_id, "config.json") is not None
+        revision_kwargs = {"revision": revision} if revision else {}
+        is_cached = try_to_load_from_cache(
+            model_id, "config.json", **revision_kwargs
+        ) is not None
 
         if progress_callback:
             progress_callback(LoadProgress(
@@ -349,12 +370,13 @@ class ModelManager:
 
         try:
             from mlx_lm import load
-            model, tokenizer = load(model_id)
+            model, tokenizer = load(model_id, **revision_kwargs)
             return tokenizer, model
         finally:
             _hf_tqdm_module.tqdm = _orig_tqdm
 
-    def _load_hf(self, model_id: str, progress_callback=None):
+    def _load_hf(self, model_id: str, progress_callback=None,
+                 revision: Optional[str] = None):
         """Load via HuggingFace transformers with progress tracking.
 
         Patches HF's tqdm (shared factory with _load_mlx) to report
@@ -379,7 +401,10 @@ class ModelManager:
         token = os.environ.get("HF_TOKEN") or None
 
         from huggingface_hub import try_to_load_from_cache
-        is_cached = try_to_load_from_cache(model_id, "config.json") is not None
+        revision_kwargs = {"revision": revision} if revision else {}
+        is_cached = try_to_load_from_cache(
+            model_id, "config.json", **revision_kwargs
+        ) is not None
 
         _ProgressTqdm = _make_progress_tqdm(model_id, progress_callback, is_cached)
 
@@ -400,7 +425,9 @@ class ModelManager:
                     message="Loading from cache..." if is_cached else "Downloading model...",
                 ))
 
-            processor = AutoProcessor.from_pretrained(model_id, token=token)
+            processor = AutoProcessor.from_pretrained(
+                model_id, token=token, **revision_kwargs
+            )
 
             if progress_callback:
                 progress_callback(LoadProgress(
@@ -414,6 +441,7 @@ class ModelManager:
                 model_id,
                 torch_dtype=torch.float16,
                 token=token,
+                **revision_kwargs,
             ).to(device)
             model.eval()
             return processor, model
@@ -443,8 +471,8 @@ class ModelManager:
         if _HAS_TORCH and torch.backends.mps.is_available():
             torch.mps.empty_cache()
 
-    def generate(self, conversation: list) -> str:
-        """Run one generation step with the full tool-use system prompt.
+    def generate(self, conversation: list, system_prompt: Optional[str] = None) -> str:
+        """Run one generation step with an optional task-specific system prompt.
 
         Does NOT handle tool calls — that's the harness's job.
         Raises RuntimeError if no model is loaded.
@@ -453,9 +481,9 @@ class ModelManager:
             raise RuntimeError("No model loaded")
 
         if self._info.backend == "mlx":
-            return self._generate_mlx(conversation)
+            return self._generate_mlx(conversation, system_prompt=system_prompt)
         else:
-            return self._generate_hf(conversation)
+            return self._generate_hf(conversation, system_prompt=system_prompt)
 
     def generate_short(self, system_prompt: str, user_message: str, max_tokens: int = 30):
         """Quick generation with a custom system prompt and low token limit.
@@ -516,12 +544,15 @@ class ModelManager:
 
         return ''.join(chunks).strip()
 
-    def _generate_mlx(self, conversation: list) -> str:
+    def _generate_mlx(self, conversation: list, system_prompt: Optional[str] = None) -> str:
         """Generate with mlx-lm, collecting all tokens into a string."""
         from mlx_lm import stream_generate
         extra_kwargs = _mlx_stream_kwargs()
 
-        messages = [{"role": "system", "content": self._system_prompt}] + conversation
+        messages = [{
+            "role": "system",
+            "content": system_prompt if system_prompt is not None else self._system_prompt,
+        }] + conversation
 
         if hasattr(self._tokenizer, "apply_chat_template") and self._tokenizer.chat_template:
             prompt = self._tokenizer.apply_chat_template(
@@ -537,13 +568,16 @@ class ModelManager:
             chunks.append(token)
             yield token
 
-    def _generate_hf(self, conversation: list):
+    def _generate_hf(self, conversation: list, system_prompt: Optional[str] = None):
         """Generate with HuggingFace transformers, yielding tokens."""
         from transformers import TextIteratorStreamer
         import threading
         import queue
 
-        messages = [{"role": "system", "content": self._system_prompt}] + conversation
+        messages = [{
+            "role": "system",
+            "content": system_prompt if system_prompt is not None else self._system_prompt,
+        }] + conversation
 
         if hasattr(self._tokenizer, "apply_chat_template") and self._tokenizer.chat_template:
             try:
