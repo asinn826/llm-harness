@@ -85,24 +85,38 @@ RECOMMENDED_MODELS = _load_recommended_models()
 
 
 def detect_backend(model_id: str) -> str:
-    """Determine whether to use mlx-lm or HF for a given model."""
+    """Choose MLX only for repositories with positive MLX identity.
+
+    Generic Hugging Face safetensors are not MLX weights.  Defaulting an
+    arbitrary Hub repository to MLX makes a cached model look runnable until a
+    late loader failure, so unrecognized repositories use Transformers.
+    """
     if not _USE_MLX:
         return "hf"
-    if model_id.startswith("mlx-community/"):
+    lowered = model_id.lower()
+    if lowered.startswith("mlx-community/") or "-mlx-" in lowered or lowered.endswith("-mlx"):
         return "mlx"
-    _HF_ONLY = {"google/gemma-4-E4B-it"}
-    if model_id in _HF_ONLY:
-        return "hf"
-    return "mlx"
+    return "hf"
 
 
 def find_cached_models() -> list[str]:
-    """Find HF model IDs already downloaded to ~/.cache/huggingface/hub/."""
+    """Find model repositories with actual weights in the local Hub cache.
+
+    A repository directory alone is not an installation: metadata and README
+    requests also create cache entries.  Only snapshots containing at least one
+    runnable weight artifact are surfaced in the product's downloaded library.
+    """
     cache_dir = Path.home() / ".cache" / "huggingface" / "hub"
     models = []
+    weight_suffixes = (".safetensors", ".bin", ".npz", ".gguf")
     if cache_dir.exists():
         for d in cache_dir.iterdir():
-            if d.name.startswith("models--"):
+            snapshots = d / "snapshots"
+            has_weights = snapshots.is_dir() and any(
+                path.is_file() and path.name.lower().endswith(weight_suffixes)
+                for path in snapshots.rglob("*")
+            )
+            if d.name.startswith("models--") and has_weights:
                 model_id = d.name.replace("models--", "").replace("--", "/")
                 models.append(model_id)
     return sorted(models)

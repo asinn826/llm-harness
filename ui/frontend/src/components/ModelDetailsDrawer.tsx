@@ -5,7 +5,7 @@
  * Action row mirrors the ModelCard's actions.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   X,
@@ -14,17 +14,26 @@ import {
   Check,
   Loader2,
   Lock,
+  AlertTriangle,
+  RefreshCw,
+  Plus,
 } from "lucide-react";
 import { models as modelsApi } from "../lib/api";
-import type { ModelDetails } from "../lib/types";
+import type { ComparisonModelInput, ModelDetails, ModelPreflight } from "../lib/types";
 import { getModelColor } from "../lib/types";
 import { useDownloads } from "../contexts/DownloadsContext";
+import { getTransferKey } from "../lib/transfers";
 
 interface ModelDetailsDrawerProps {
   modelId: string | null;
   backend: "mlx" | "hf";
   isCached: boolean;
   gated?: boolean;
+  selectionMode?: boolean;
+  isSelected?: boolean;
+  selectionFull?: boolean;
+  onAddToComparison?: (model: ComparisonModelInput) => void;
+  onRemoveFromComparison?: (modelId: string) => void;
   onClose: () => void;
 }
 
@@ -35,16 +44,40 @@ export function ModelDetailsDrawer({
   backend,
   isCached,
   gated = false,
+  selectionMode = false,
+  isSelected = false,
+  selectionFull = false,
+  onAddToComparison,
+  onRemoveFromComparison,
   onClose,
 }: ModelDetailsDrawerProps) {
-  const { downloads, currentModelId, startDownload, cancelDownload } = useDownloads();
+  const {
+    downloads,
+    currentModelId,
+    currentBackend,
+    currentRevision,
+    startDownload,
+    startInstall,
+    cancelDownload,
+  } = useDownloads();
   const [tab, setTab] = useState<InnerTab>("overview");
   const [details, setDetails] = useState<ModelDetails | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [revisionInput, setRevisionInput] = useState("main");
+  const [preflight, setPreflight] = useState<ModelPreflight | null>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
+  const [preflightError, setPreflightError] = useState<string | null>(null);
 
   // Per-session cache so re-opening is instant
   const cacheRef = useRef<Map<string, ModelDetails>>(new Map());
+  const preflightRequestRef = useRef(0);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+
+  useEffect(() => {
+    closeRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!modelId) return;
@@ -65,22 +98,127 @@ export function ModelDetailsDrawer({
       .finally(() => setLoading(false));
   }, [modelId]);
 
-  // Close on Esc
+  const runPreflight = useCallback(async () => {
+    if (!modelId) return;
+    const requestId = ++preflightRequestRef.current;
+    const requestedRevision = revisionInput.trim() || null;
+    setPreflightLoading(true);
+    setPreflightError(null);
+    try {
+      const result = await modelsApi.preflight({
+        model_id: modelId,
+        backend,
+        revision: requestedRevision,
+      });
+      if (preflightRequestRef.current !== requestId) return;
+      setPreflight(result);
+    } catch (e) {
+      if (preflightRequestRef.current !== requestId) return;
+      setPreflight(null);
+      setPreflightError(e instanceof Error ? e.message : String(e));
+    } finally {
+      if (preflightRequestRef.current === requestId) {
+        setPreflightLoading(false);
+      }
+    }
+  }, [backend, modelId, revisionInput]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void runPreflight(); }, 0);
+    return () => {
+      window.clearTimeout(timer);
+      preflightRequestRef.current += 1;
+    };
+  }, [runPreflight]);
+
+  // Keep keyboard focus inside the modal drawer and restore it on close.
   useEffect(() => {
     if (!modelId) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const frame = window.requestAnimationFrame(() => dialogRef.current?.focus());
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeRef.current();
+        return;
+      }
+      if (e.key !== "Tab" || !dialogRef.current) return;
+      const focusable = Array.from(dialogRef.current.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )).filter((element) => element.getClientRects().length > 0);
+      if (focusable.length === 0) {
+        e.preventDefault();
+        dialogRef.current.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (e.shiftKey && (document.activeElement === first || !dialogRef.current.contains(document.activeElement))) {
+        e.preventDefault();
+        last.focus();
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
     };
     window.addEventListener("keydown", handler);
-    return () => window.removeEventListener("keydown", handler);
-  }, [modelId, onClose]);
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.removeEventListener("keydown", handler);
+      previousFocus?.focus();
+    };
+  }, [modelId]);
 
   if (!modelId) return null;
 
-  const dl = downloads[modelId];
+  const requestedRevision = revisionInput.trim() || null;
+  const activePreflight = preflight &&
+    preflight.model_id === modelId &&
+    preflight.backend === backend &&
+    (preflight.requested_revision ?? null) === requestedRevision
+      ? preflight
+      : null;
+  const transferBackend = activePreflight?.backend ?? backend;
+  const transferRevision = activePreflight?.resolved_revision ?? null;
+  const transferKey = getTransferKey(modelId, transferBackend, transferRevision);
+  const dl = downloads[transferKey];
   const isActive = currentModelId === modelId;
+  const isPinnedActive = isActive &&
+    currentBackend === transferBackend &&
+    (!activePreflight?.resolved_revision || currentRevision === activePreflight.resolved_revision);
   const isBusy = dl?.status === "downloading" || dl?.status === "loading";
+  const isReady = dl?.status === "ready";
+  const needsTransferRetry = dl?.status === "error";
+  const visiblePreflight = activePreflight && isReady
+    ? { ...activePreflight, cache_status: "complete" as const }
+    : activePreflight;
   const color = getModelColor(modelId);
+  const exactRevisionCached = activePreflight?.cache_status === "complete" || (
+    activePreflight?.cache_status === undefined && isCached
+  );
+  const canUse = Boolean(activePreflight?.can_load && activePreflight.resolved_revision);
+
+  const selectedModel: ComparisonModelInput | null = activePreflight?.resolved_revision
+    ? {
+        model_id: modelId,
+        backend: activePreflight.backend,
+        revision: activePreflight.resolved_revision,
+      }
+    : null;
+
+  const handleInstallOrAdd = () => {
+    if (!selectedModel || !activePreflight?.can_load || !activePreflight.resolved_revision) return;
+    const resolvedRevision = activePreflight.resolved_revision;
+    onAddToComparison?.(selectedModel);
+    if ((!exactRevisionCached || needsTransferRetry) && !isReady && !isPinnedActive && !isBusy) {
+      startInstall(modelId, activePreflight.backend, resolvedRevision);
+    }
+  };
+
+  const handleLoad = () => {
+    if (!activePreflight?.can_load || !activePreflight.resolved_revision) return;
+    startDownload(modelId, activePreflight.backend, activePreflight.resolved_revision);
+  };
 
   return (
     <>
@@ -96,8 +234,11 @@ export function ModelDetailsDrawer({
       />
       {/* Drawer */}
       <div
+        ref={dialogRef}
         role="dialog"
+        aria-modal="true"
         aria-label={`Details for ${modelId}`}
+        tabIndex={-1}
         style={{
           position: "fixed",
           top: 0,
@@ -134,6 +275,7 @@ export function ModelDetailsDrawer({
           </div>
           <button
             onClick={onClose}
+            aria-label="Close model details"
             style={{
               width: 28, height: 28,
               display: "flex", alignItems: "center", justifyContent: "center",
@@ -148,7 +290,45 @@ export function ModelDetailsDrawer({
 
         {/* Action row */}
         <div style={{ padding: "12px 20px", borderBottom: "1px solid var(--border-subtle)", flexShrink: 0, display: "flex", alignItems: "center", gap: 10 }}>
-          {gated && !isCached && !isActive && (
+          {selectionMode && isSelected && (
+            <button
+              onClick={() => onRemoveFromComparison?.(modelId)}
+              style={{ ...primaryBtn, background: "var(--success-muted)", color: "var(--success)" }}
+            >
+              <Check size={12} style={{ marginRight: 6 }} /> Added to lineup
+            </button>
+          )}
+          {selectionMode && isSelected && needsTransferRetry && canUse && (
+            <button
+              onClick={() => startInstall(modelId, transferBackend, transferRevision!)}
+              style={{ ...primaryBtn, background: "var(--error-muted)", color: "var(--error)" }}
+            >
+              <RefreshCw size={12} style={{ marginRight: 6 }} /> Retry install
+            </button>
+          )}
+          {selectionMode && !isSelected && preflightLoading && (
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--text-muted)", fontSize: 12 }}>
+              <Loader2 size={13} className="animate-spin" /> Checking compatibility…
+            </span>
+          )}
+          {selectionMode && !isSelected && !preflightLoading && canUse && !isBusy && (
+            <button
+              onClick={handleInstallOrAdd}
+              disabled={selectionFull}
+              style={{ ...primaryBtn, opacity: selectionFull ? 0.45 : 1, cursor: selectionFull ? "not-allowed" : "pointer" }}
+              title={selectionFull ? "The comparison lineup already has three models" : undefined}
+            >
+              {exactRevisionCached && !needsTransferRetry || isReady ? <Plus size={12} style={{ marginRight: 6 }} /> : <Download size={12} style={{ marginRight: 6 }} />}
+              {selectionFull
+                ? "Lineup full"
+                : needsTransferRetry
+                  ? "Retry install & add"
+                  : exactRevisionCached || isReady
+                  ? "Add to comparison"
+                  : "Install & add"}
+            </button>
+          )}
+          {selectionMode && !isSelected && !preflightLoading && !canUse && activePreflight?.access === "token_required" && (
             <a
               href={`https://huggingface.co/${modelId}`}
               target="_blank"
@@ -163,23 +343,19 @@ export function ModelDetailsDrawer({
                 textDecoration: "none",
               }}
             >
-              <Lock size={12} /> Open on HuggingFace
+              <Lock size={12} /> Get model access
             </a>
           )}
-          {!gated && !isCached && !isActive && !isBusy && (
+          {!selectionMode && !isPinnedActive && !isBusy && canUse && (
             <button
-              onClick={() => startDownload(modelId, backend)}
+              onClick={handleLoad}
               style={primaryBtn}
             >
-              <Download size={12} style={{ marginRight: 6 }} /> Download
+              <Download size={12} style={{ marginRight: 6 }} />
+              {exactRevisionCached ? "Load model" : "Download & load"}
             </button>
           )}
-          {isCached && !isActive && !isBusy && (
-            <button onClick={() => startDownload(modelId, backend)} style={primaryBtn}>
-              Load model
-            </button>
-          )}
-          {isActive && (
+          {!selectionMode && isPinnedActive && (
             <span
               style={{
                 display: "inline-flex", alignItems: "center", gap: 4,
@@ -202,7 +378,12 @@ export function ModelDetailsDrawer({
                   <div style={{ height: "100%", width: `${Math.max(dl.progress * 100, 2)}%`, background: "var(--accent)", transition: "width 300ms ease-out" }} />
                 </div>
               </div>
-              <button onClick={() => cancelDownload(modelId)} style={iconBtn} title="Cancel">
+              <button
+                onClick={() => cancelDownload(modelId, transferBackend, transferRevision)}
+                style={iconBtn}
+                title="Stop watching"
+                aria-label={`Stop watching ${modelId}`}
+              >
                 <X size={14} />
               </button>
             </div>
@@ -231,6 +412,18 @@ export function ModelDetailsDrawer({
 
         {/* Content */}
         <div style={{ flex: 1, overflowY: "auto" }}>
+          {tab === "overview" && (
+            <PreflightPanel
+              modelId={modelId}
+              revision={revisionInput}
+              onRevisionChange={setRevisionInput}
+              onCheck={runPreflight}
+              loading={preflightLoading}
+              error={preflightError}
+              result={visiblePreflight}
+              fallbackGated={gated}
+            />
+          )}
           {loading && <LoadingState />}
           {error && <ErrorState message={error} />}
           {details && !loading && !error && tab === "overview" && (
@@ -246,6 +439,132 @@ export function ModelDetailsDrawer({
 }
 
 // ── Tab contents ──────────────────────────────────────────────────────
+
+function PreflightPanel({
+  modelId,
+  revision,
+  onRevisionChange,
+  onCheck,
+  loading,
+  error,
+  result,
+  fallbackGated,
+}: {
+  modelId: string;
+  revision: string;
+  onRevisionChange: (value: string) => void;
+  onCheck: () => void;
+  loading: boolean;
+  error: string | null;
+  result: ModelPreflight | null;
+  fallbackGated: boolean;
+}) {
+  const statusColor = result?.can_load
+    ? "var(--success)"
+    : result?.error || error
+      ? "var(--error)"
+      : "var(--text-muted)";
+
+  const rows: [string, string][] = result ? [
+    ["Access", result.access === "authorized" ? "Gated · authorized" : result.access.replace("_", " ")],
+    ["Runtime", result.runtime_available === false ? `${result.backend.toUpperCase()} unavailable` : result.backend.toUpperCase()],
+    ["Weights", formatBytes(result.model_size_bytes)],
+    ["Memory", `${formatBytes(result.estimated_memory_bytes)} · ${result.memory_fit.replace("_", " ")}`],
+    ["Disk", result.cache_status === "complete"
+      ? "Already installed"
+      : `${formatBytes(result.required_download_bytes ?? result.model_size_bytes)} · ${(result.disk_fit ?? "unknown").replace("_", " ")}`],
+    ["Local cache", result.cache_status ?? "unknown"],
+    ["Pinned commit", result.resolved_revision ? result.resolved_revision.slice(0, 12) : "unresolved"],
+  ] : [];
+
+  return (
+    <div style={{ padding: "16px 20px 0" }}>
+      <div style={{
+        border: "1px solid var(--border-default)", borderRadius: 8,
+        background: "var(--bg-secondary)", overflow: "hidden",
+      }}>
+        <div style={{ padding: 12, borderBottom: "1px solid var(--border-subtle)" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
+            <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-primary)" }}>Run preflight</span>
+            <span style={{ flex: 1 }} />
+            {loading && <Loader2 size={12} className="animate-spin" style={{ color: "var(--accent)" }} />}
+            {!loading && result && (
+              <span style={{ fontSize: 10, color: statusColor, fontWeight: 500 }}>
+                {result.can_load ? "Ready to run" : "Action required"}
+              </span>
+            )}
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input
+              aria-label="Hugging Face revision"
+              value={revision}
+              onChange={(event) => onRevisionChange(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") onCheck(); }}
+              placeholder="main, tag, or commit"
+              style={{
+                flex: 1, minWidth: 0, padding: "6px 8px", borderRadius: 5,
+                border: "1px solid var(--border-default)", background: "var(--bg-primary)",
+                color: "var(--text-primary)", fontFamily: "var(--font-mono)", fontSize: 11,
+              }}
+            />
+            <button onClick={onCheck} disabled={loading} style={{
+              display: "inline-flex", alignItems: "center", gap: 5,
+              padding: "6px 9px", borderRadius: 5,
+              border: "1px solid var(--border-default)", background: "var(--bg-tertiary)",
+              color: "var(--text-secondary)", fontSize: 11, cursor: loading ? "wait" : "pointer",
+            }}>
+              <RefreshCw size={11} /> Check
+            </button>
+          </div>
+          <div style={{ marginTop: 5, fontSize: 9, color: "var(--text-muted)" }}>
+            A mutable revision is resolved to an exact commit before it enters a comparison.
+          </div>
+        </div>
+
+        {loading && !result && (
+          <div style={{ padding: 12, fontSize: 11, color: "var(--text-muted)" }}>
+            Checking access, weights, local cache, and memory fit for {modelId}…
+          </div>
+        )}
+
+        {error && (
+          <div style={{ display: "flex", gap: 7, padding: 12, color: "var(--error)", fontSize: 11, lineHeight: 1.45 }}>
+            <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} /> {error}
+          </div>
+        )}
+
+        {!result && !loading && !error && fallbackGated && (
+          <div style={{ padding: 12, color: "var(--warning)", fontSize: 11 }}>
+            This model may require accepted terms and a Hugging Face token.
+          </div>
+        )}
+
+        {result && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px", padding: 12 }}>
+              {rows.map(([label, value]) => (
+                <div key={label}>
+                  <div style={{ color: "var(--text-muted)", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 2 }}>{label}</div>
+                  <div style={{ color: "var(--text-primary)", fontSize: 11, textTransform: label === "Local cache" ? "capitalize" : undefined }}>{value}</div>
+                </div>
+              ))}
+            </div>
+            {result.error && (
+              <div style={{
+                display: "flex", gap: 7, padding: "10px 12px",
+                borderTop: "1px solid var(--border-subtle)",
+                background: "var(--error-muted)", color: "var(--error)", fontSize: 11, lineHeight: 1.45,
+              }}>
+                <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+                <span>{result.error.message}</span>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
 
 function OverviewTab({ details, modelId }: { details: ModelDetails; modelId: string }) {
   const metaRows: [string, React.ReactNode][] = [
@@ -316,6 +635,7 @@ function CardTab({ readme }: { readme: string }) {
 // ── Helpers ─────────────────────────────────────────────────────────────
 
 function LoadingState() {
+  const widths = [78, 64, 86, 72];
   return (
     <div style={{ padding: 20, display: "flex", flexDirection: "column", gap: 12 }}>
       {[0, 1, 2, 3].map((i) => (
@@ -323,7 +643,7 @@ function LoadingState() {
           key={i}
           style={{
             height: 14,
-            width: `${60 + Math.random() * 30}%`,
+            width: `${widths[i]}%`,
             borderRadius: 3,
             background: "var(--bg-elevated)",
             opacity: 0.5,

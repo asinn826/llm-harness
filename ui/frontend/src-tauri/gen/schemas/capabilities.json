@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Default capability set for the main window","local":true,"windows":["main"],"permissions":["core:default","shell:allow-execute",{"identifier":"shell:allow-spawn","allow":[{"name":"binaries/llm-harness-backend","sidecar":true}]}]}}

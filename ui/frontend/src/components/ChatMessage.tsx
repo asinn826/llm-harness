@@ -78,13 +78,14 @@ export function ChatMessage({
         <span className="text-[10px] text-[var(--text-muted)] font-medium uppercase tracking-wider">
           {modelDisplay}
         </span>
-        {tokensGenerated && generationTimeMs && (
+        {tokensGenerated != null && generationTimeMs != null &&
+          (tokensGenerated > 0 || generationTimeMs > 0) && (
           <span className="text-[10px] text-[var(--text-muted)] ml-auto">
             {(generationTimeMs / 1000).toFixed(1)}s · {tokensGenerated} tok
           </span>
-        )}
+          )}
       </div>
-      <div className="text-[var(--text-primary)] text-sm leading-relaxed prose prose-invert prose-sm max-w-none">
+      <div className="text-[var(--text-primary)] text-sm leading-relaxed prose prose-sm max-w-none">
         {displayContent ? (
           <>
             <ReactMarkdown
@@ -234,9 +235,9 @@ export function ToolCallApproval({
 }) {
   // Auto-focus approve button so Enter works immediately
   const approveRef = useRef<HTMLButtonElement>(null);
-  useState(() => {
+  useEffect(() => {
     setTimeout(() => approveRef.current?.focus(), 50);
-  });
+  }, []);
 
   // Global Enter key handler
   useEffect(() => {

@@ -1,10 +1,10 @@
 /**
  * HardwareFitChip — Fits / Tight / Too big indicator.
  *
- * Heuristic:
- *   estimated_ram = size_bytes * (1.2 if quant="4-bit" else 2.0)
- *   Fits   if estimated_ram < 0.75 * total_ram
- *   Tight  if < 0.9 * total_ram
+ * Lightweight card heuristic, aligned with backend preflight:
+ *   estimated_ram = size_bytes * 1.2 + 512 MiB runtime overhead
+ *   Fits   if estimated_ram <= 0.8 * total_ram
+ *   Tight  if estimated_ram <= total_ram
  *   Too big otherwise
  *
  * Hover (title attr) reveals the numerical breakdown. Not a hard filter —
@@ -19,26 +19,48 @@ import type { HardwareInfo, ModelInfo } from "../lib/types";
 type Verdict = "fits" | "tight" | "too_big" | "unknown";
 
 let _hwCache: HardwareInfo | null = null;
+let _hwRequest: Promise<HardwareInfo> | null = null;
+
+function getHardware(): Promise<HardwareInfo> {
+  if (_hwCache) return Promise.resolve(_hwCache);
+  if (!_hwRequest) {
+    _hwRequest = systemApi.hardware()
+      .then((hardware) => {
+        _hwCache = hardware;
+        return hardware;
+      })
+      .catch((error) => {
+        // Permit a later mount to retry after a transient backend failure.
+        _hwRequest = null;
+        throw error;
+      });
+  }
+  return _hwRequest;
+}
 
 export function HardwareFitChip({ model }: { model: ModelInfo }) {
   const [hw, setHw] = useState<HardwareInfo | null>(_hwCache);
 
   useEffect(() => {
-    if (_hwCache) return;
-    systemApi.hardware()
-      .then((h) => { _hwCache = h; setHw(h); })
+    let active = true;
+    getHardware()
+      .then((hardware) => {
+        if (active) setHw(hardware);
+      })
       .catch(() => {});
+    return () => {
+      active = false;
+    };
   }, []);
 
   const size = model.size_bytes ?? 0;
   if (!size || !hw) return null;
 
-  const multiplier = (model.quantization || "").includes("4-bit") ? 1.2 : 2.0;
-  const estRam = size * multiplier;
+  const estRam = size * 1.2 + 512 * 1024 ** 2;
 
   let verdict: Verdict = "unknown";
-  if (estRam < 0.75 * hw.total_memory_bytes) verdict = "fits";
-  else if (estRam < 0.9 * hw.total_memory_bytes) verdict = "tight";
+  if (estRam <= 0.8 * hw.total_memory_bytes) verdict = "fits";
+  else if (estRam <= hw.total_memory_bytes) verdict = "tight";
   else verdict = "too_big";
 
   const { label, color, bg } = verdictStyle(verdict);

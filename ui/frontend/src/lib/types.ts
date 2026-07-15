@@ -35,6 +35,38 @@ export interface ModelsResponse {
   cached: ModelInfo[];
   current: string | null;
   current_backend: string | null;
+  current_revision?: string | null;
+}
+
+export interface ModelPreflightError {
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+/** Executability verdict returned before any Hub model is installed or run. */
+export interface ModelPreflight {
+  model_id: string;
+  backend: "mlx" | "hf";
+  requested_revision: string | null;
+  resolved_revision: string | null;
+  access: "public" | "authorized" | "token_required" | "denied";
+  compatible: boolean | null;
+  compatibility_code: string;
+  model_size_bytes: number;
+  estimated_memory_bytes: number;
+  available_memory_bytes: number;
+  memory_budget_bytes?: number;
+  memory_fit: "fits" | "tight" | "too_large" | "unknown";
+  can_install: boolean;
+  can_load: boolean;
+  error: ModelPreflightError | null;
+  runtime_available?: boolean;
+  cache_status?: "missing" | "partial" | "complete";
+  cached_bytes?: number;
+  required_download_bytes?: number;
+  available_disk_bytes?: number;
+  disk_fit?: "fits" | "insufficient" | "unknown";
 }
 
 /** A single Hub search hit returned by GET /models/search. */
@@ -66,6 +98,7 @@ export interface ModelDetails {
   pipeline_tag: string | null;
   model_size_bytes: number;
   last_modified: string | null;
+  resolved_revision?: string | null;
   readme_markdown: string;
 }
 
@@ -75,6 +108,21 @@ export interface HardwareInfo {
   available_memory_bytes: number;
   platform: string;
   is_apple_silicon: boolean;
+}
+
+export type ApiKeyName = "TAVILY_API_KEY" | "HF_TOKEN";
+
+export type MaskedApiKeys = Record<ApiKeyName, string>;
+
+export interface ApiKeyReveal {
+  key: ApiKeyName;
+  value: string;
+}
+
+export interface ApiKeySaveResult {
+  status: string;
+  unchanged?: boolean;
+  masked: string;
 }
 
 /** One entry in GET /models/updates response */
@@ -91,6 +139,8 @@ export type DownloadStatus = "downloading" | "loading" | "ready" | "error";
 export interface DownloadState {
   modelId: string;
   backend: "mlx" | "hf";
+  revision?: string | null;
+  operation?: "install" | "load";
   status: DownloadStatus;
   progress: number; // 0..1
   message: string;
@@ -98,14 +148,40 @@ export interface DownloadState {
   startedAt: number;
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  created_at: string;
+  updated_at: string;
+  is_default: number;
+  session_count: number;
+  comparison_count: number;
+}
+
+export interface ComparisonModel {
+  session_id: string;
+  position: number;
+  model_id: string;
+  backend: "mlx" | "hf" | null;
+  revision: string | null;
+}
+
+export interface ComparisonModelInput {
+  model_id: string;
+  backend?: "mlx" | "hf" | null;
+  revision?: string | null;
+}
+
 export interface Session {
   id: string;
   title: string;
   created_at: string;
   updated_at: string;
-  is_compare: number;
+  is_compare: number | boolean;
+  project_id: string;
   message_count?: number;
-  models?: string[];
+  models: string[];
+  comparison_models: ComparisonModel[];
 }
 
 export interface Message {
@@ -124,21 +200,28 @@ export interface Message {
 
 /** WebSocket message types (server → client) */
 export type WSServerMessage =
-  | { type: "token"; data: string }
-  | { type: "tool_call"; tool: string; args: Record<string, unknown>; needs_confirmation: boolean }
-  | { type: "tool_result"; result: string; tool: string; args: Record<string, unknown> }
+  | { type: "token"; data: string; session_id?: string; model_id?: string; index?: number }
+  | { type: "tool_call"; tool: string; args: Record<string, unknown>; needs_confirmation: boolean; session_id?: string; model_id?: string; index?: number }
+  | { type: "tool_result"; result: string; tool: string; args?: Record<string, unknown>; session_id?: string; model_id?: string; index?: number }
   | { type: "done"; response: string; tokens?: number; time_ms?: number; session_id?: string }
-  | { type: "session_created"; session_id: string; title?: string }
+  | { type: "session_created"; session_id: string; title?: string; project_id?: string }
   | { type: "error"; message: string }
   | { type: "title_updated"; session_id: string; title: string }
   // Compare-specific
-  | { type: "model_start"; model_id: string; index: number }
-  | { type: "model_done"; model_id: string; index: number; response: string; tokens: number; time_ms: number }
+  | { type: "model_start"; session_id: string; model_id: string; index: number }
+  | { type: "model_done"; session_id: string; model_id: string; index: number; response: string; tokens: number; time_ms: number }
   | { type: "compare_done"; session_id: string };
 
 /** WebSocket message types (client → server) */
 export type WSClientMessage =
-  | { type: "message"; content: string; session_id?: string; model_id?: string }
+  | {
+      type: "message";
+      content: string;
+      session_id?: string;
+      model_id?: string;
+      models?: Array<string | ComparisonModelInput>;
+      project_id?: string;
+    }
   | { type: "tool_response"; approved: boolean | string };
 
 /** Model color assignment — persistent across the app */

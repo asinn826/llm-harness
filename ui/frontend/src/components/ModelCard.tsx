@@ -36,6 +36,7 @@ import { HardwareFitChip } from "./HardwareFitChip";
 import { UpdateBadge } from "./UpdateBadge";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { models as modelsApi } from "../lib/api";
+import { getTransferKey } from "../lib/transfers";
 
 interface ModelCardProps {
   model: ModelInfo;
@@ -46,16 +47,27 @@ interface ModelCardProps {
   hasUpdate?: boolean;
   /** Called after a successful cache deletion (parent refetches list). */
   onDeleted?: () => void;
+  /** Replaces load/download actions with an explicit preflight/details action. */
+  onReview?: () => void;
+  reviewLabel?: string;
 }
 
-export function ModelCard({ model, variant = "rich", starred = false, hasUpdate = false, onDeleted }: ModelCardProps) {
+export function ModelCard({
+  model,
+  variant = "rich",
+  starred = false,
+  hasUpdate = false,
+  onDeleted,
+  onReview,
+  reviewLabel = "Check compatibility",
+}: ModelCardProps) {
   const { downloads, currentModelId, startDownload, cancelDownload } = useDownloads();
   const [menuOpen, setMenuOpen] = useState(false);
   const [deleteDialog, setDeleteDialog] = useState(false);
   const [unloadDialog, setUnloadDialog] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
 
-  const dl = downloads[model.id];
+  const dl = downloads[getTransferKey(model.id, model.backend, null)];
   const isActive = currentModelId === model.id;
   const isBusy = dl?.status === "downloading" || dl?.status === "loading";
   const isError = dl?.status === "error";
@@ -69,9 +81,9 @@ export function ModelCard({ model, variant = "rich", starred = false, hasUpdate 
       await modelsApi.deleteCache(model.id);
       setDeleteDialog(false);
       onDeleted?.();
-    } catch (e: any) {
+    } catch (e: unknown) {
       // 409 when currently loaded
-      const msg = String(e?.message ?? e);
+      const msg = e instanceof Error ? e.message : String(e);
       if (msg.toLowerCase().includes("loaded") || msg.toLowerCase().includes("unload")) {
         setDeleteDialog(false);
         setUnloadDialog(true);
@@ -89,7 +101,7 @@ export function ModelCard({ model, variant = "rich", starred = false, hasUpdate 
   if (variant === "compact") {
     return renderCompact({
       model, color, isActive, isBusy, isError, dl,
-      startDownload, cancelDownload,
+      startDownload, cancelDownload, onReview, reviewLabel,
     });
   }
 
@@ -97,16 +109,17 @@ export function ModelCard({ model, variant = "rich", starred = false, hasUpdate 
 
   return (
     <div
+      className="model-card"
       style={{
-        border: "1px solid var(--border-subtle)",
-        borderRadius: 10,
-        padding: 16,
+        border: "1px solid var(--border-default)",
+        borderRadius: 3,
+        padding: 14,
         background: "var(--bg-secondary)",
         display: "flex",
         flexDirection: "column",
-        gap: 10,
-        minHeight: 160,
-        transition: "background 120ms ease-out",
+        gap: 8,
+        minHeight: model.description && !onReview ? 126 : 92,
+        transition: "background 120ms ease-out, border-color 120ms ease-out, transform 120ms ease-out",
       }}
     >
       {/* Row 1: dot, name, badges */}
@@ -212,13 +225,13 @@ export function ModelCard({ model, variant = "rich", starred = false, hasUpdate 
       </div>
 
       {/* Row 3: description */}
-      {model.description && (
+      {model.description && !onReview && (
         <p
           style={{
             fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5,
             margin: 0,
             display: "-webkit-box",
-            WebkitLineClamp: 2,
+            WebkitLineClamp: 1,
             WebkitBoxOrient: "vertical",
             overflow: "hidden",
           }}
@@ -231,15 +244,25 @@ export function ModelCard({ model, variant = "rich", starred = false, hasUpdate 
       <div style={{ flex: 1 }} />
 
       {/* Row 5: actions */}
-      <ActionRow
-        model={model}
-        isActive={isActive}
-        isBusy={isBusy}
-        isError={isError}
-        dl={dl}
-        onStart={() => startDownload(model.id, model.backend)}
-        onCancel={() => cancelDownload(model.id)}
-      />
+      {onReview ? (
+        <button onClick={onReview} aria-label={`${reviewLabel} for ${model.id}`} style={{
+          alignSelf: "flex-start", padding: "6px 10px", borderRadius: 6,
+          border: "1px solid var(--border-default)", background: "var(--bg-tertiary)",
+          color: "var(--text-secondary)", fontSize: 11, fontWeight: 500, cursor: "pointer",
+        }}>
+          {reviewLabel}
+        </button>
+      ) : (
+        <ActionRow
+          model={model}
+          isActive={isActive}
+          isBusy={isBusy}
+          isError={isError}
+          dl={dl}
+          onStart={() => startDownload(model.id, model.backend)}
+          onCancel={() => cancelDownload(model.id, model.backend, null)}
+        />
+      )}
 
       {/* Delete confirmation */}
       {deleteDialog && (
@@ -280,8 +303,8 @@ export function ModelCard({ model, variant = "rich", starred = false, hasUpdate 
               await modelsApi.unload();
               setUnloadDialog(false);
               setDeleteDialog(true);
-            } catch (e: any) {
-              setDeleteError(String(e?.message ?? e));
+            } catch (e: unknown) {
+              setDeleteError(e instanceof Error ? e.message : String(e));
               setUnloadDialog(false);
             }
           }}
@@ -328,19 +351,23 @@ function renderCompact(args: {
   isError: boolean;
   dl: ReturnType<typeof useDownloads>["downloads"][string] | undefined;
   startDownload: (id: string, backend: "mlx" | "hf") => void;
-  cancelDownload: (id: string) => void;
+  cancelDownload: (id: string, backend: "mlx" | "hf", revision?: string | null) => void;
+  onReview?: () => void;
+  reviewLabel: string;
 }) {
-  const { model, color, isActive, isBusy, isError, dl, startDownload, cancelDownload } = args;
+  const { model, color, isActive, isBusy, isError, dl, startDownload, cancelDownload, onReview, reviewLabel } = args;
   return (
     <div
+      className="model-row"
       style={{
         display: "flex",
         alignItems: "center",
         gap: 10,
-        padding: "10px 14px",
-        border: "1px solid var(--border-subtle)",
-        borderRadius: 8,
-        background: "var(--bg-secondary)",
+        minHeight: 64,
+        padding: "10px 12px",
+        border: "1px solid var(--border-default)",
+        borderRadius: 0,
+        background: "transparent",
       }}
     >
       <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
@@ -352,15 +379,25 @@ function renderCompact(args: {
           {[model.author, model.parameters, model.size_label || model.size].filter(Boolean).join(" · ")}
         </div>
       </div>
-      <ActionRow
-        model={model}
-        isActive={isActive}
-        isBusy={isBusy}
-        isError={isError}
-        dl={dl}
-        onStart={() => startDownload(model.id, model.backend)}
-        onCancel={() => cancelDownload(model.id)}
-      />
+      {onReview ? (
+        <button
+          onClick={onReview}
+          aria-label={`${reviewLabel} for ${model.id}`}
+          style={secondaryBtnStyle}
+        >
+          {reviewLabel}
+        </button>
+      ) : (
+        <ActionRow
+          model={model}
+          isActive={isActive}
+          isBusy={isBusy}
+          isError={isError}
+          dl={dl}
+          onStart={() => startDownload(model.id, model.backend)}
+          onCancel={() => cancelDownload(model.id, model.backend, null)}
+        />
+      )}
     </div>
   );
 }
@@ -398,7 +435,7 @@ function ActionRow({
             />
           </div>
         </div>
-        <button onClick={onCancel} title="Cancel" style={iconBtnStyle}>
+        <button onClick={onCancel} title="Stop watching" aria-label={`Stop watching ${model.id}`} style={iconBtnStyle}>
           <XIcon size={14} />
         </button>
       </div>

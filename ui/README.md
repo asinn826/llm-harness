@@ -1,201 +1,111 @@
 # LLM Harness UI
 
-Desktop application for the LLM Harness — browse, compare, and chat with local models.
+The comparison-first desktop surface for selecting freely available Hugging Face models, installing exact revisions locally, and running the same conversation side by side.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────┐
-│         Tauri Shell (Rust)          │  ← Native window, system tray
-│     ┌───────────────────────┐       │
-│     │  React + TypeScript   │       │  ← Webview frontend
-│     │  Tailwind + Lucide    │       │
-│     └───────────┬───────────┘       │
-│                 │ WebSocket + REST   │
-│     ┌───────────┴───────────┐       │
-│     │   FastAPI (Python)    │       │  ← Wraps harness.py + tools.py
-│     │   SQLite sessions     │       │
-│     └───────────┬───────────┘       │
-│                 │                   │
-│     ┌───────────┴───────────┐       │
-│     │  MLX / HuggingFace    │       │  ← Model backends
-│     └───────────────────────┘       │
-└─────────────────────────────────────┘
+```text
+Tauri desktop shell
+└── React + TypeScript
+    ├── Projects and comparison history
+    ├── Hub discovery and preflight
+    └── Aligned multi-model transcripts
+        ↕ trusted local REST/WebSockets
+FastAPI sidecar
+├── Hub preflight and pinned installer
+├── Sequential MLX / Transformers runtime manager
+└── SQLite projects, lineups, turns, and outcomes
 ```
 
-**Key principle:** `harness.py` and `tools.py` are used as-is. The backend wraps them with a FastAPI layer. The CLI (`cli.py`) is not used — the React frontend replaces it.
+The comparison executor intentionally loads one model at a time. This fits local accelerator constraints while keeping the prompt, supported generation behavior, ordered lineup, and conversation history stable across models.
 
-## Quick Start (Development)
+Legacy tool-enabled chat remains readable, but `harness.py` and `tools.py` are no longer the desktop product's organizing layer.
 
-### Prerequisites
+## Development
 
-- **Python 3.9+** with the harness dependencies installed (`pip install -r requirements.txt`)
-- **Node.js 20+** and npm
-- **Rust** (for the native desktop window): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-- **FastAPI dependencies:** `pip install fastapi 'uvicorn[standard]' websockets`
-
-### Run
+Prerequisites: Python 3.11+, Node.js 20+, and Rust for the native Tauri window.
 
 ```bash
-# Install frontend dependencies (first time only)
+python3.11 -m pip install -r requirements.txt
+python3.11 -m pip install -r ui/backend/requirements.txt
 cd ui/frontend && npm install && cd ../..
-
-# Launch the desktop app (native window with hot reload)
 ./ui/dev.sh
 ```
 
-This starts the FastAPI backend, then launches a native Tauri window with Vite hot reload. No browser needed.
+Use `./ui/dev.sh --browser` when a native window is unnecessary. The development frontend runs at `http://localhost:5173`; the local API runs at `http://127.0.0.1:8000`.
 
-### Without Rust
-
-If you don't have Rust installed yet, use browser mode as a fallback:
+## Verification
 
 ```bash
-./ui/dev.sh --browser   # Opens in your default browser instead of a native window
-```
-
-### Other modes
-
-```bash
-./ui/dev.sh --backend   # Backend only (for debugging)
-```
-
-### Run tests
-
-```bash
-# Backend tests (from project root)
-python3 -m pytest tests/test_session_store.py tests/test_server.py -v
-
-# All tests
-python3 -m pytest tests/ -v
-```
-
-## Building for Production
-
-### Desktop App (.dmg)
-
-```bash
+python3.11 -m pytest -q
 cd ui/frontend
-npx tauri build
+npm run lint
+npm run build
 ```
 
-The `.dmg` (macOS) will be in `ui/frontend/src-tauri/target/release/bundle/dmg/`. Double-click to install like any Mac app.
+## Production build
 
-**Runtime requirement:** Python 3.9+ must be on the system PATH. The app spawns the FastAPI backend as a child process on launch — no separate server to manage.
-
-### Browser fallback
-
-If you need to run without a native window (e.g., remote server):
+From the repository root:
 
 ```bash
-cd ui/frontend && npm run build && cd ../..
-uvicorn ui.backend.server:app --host 0.0.0.0 --port 8000
+./ui/build.sh
+./ui/build.sh --install   # optional: copy the app to /Applications
 ```
 
-Then add static file serving to the FastAPI app to serve `ui/frontend/dist/`.
+The packaged macOS app uses MLX. The curated starter catalog therefore points to compatible MLX repositories hosted on Hugging Face. Standard Transformers repositories remain available in development environments that install PyTorch and Transformers.
 
-## Project Structure
+## Product API
 
-```
-ui/
-├── backend/
-│   ├── __init__.py
-│   ├── server.py          # FastAPI app (REST + WebSocket endpoints)
-│   ├── model_manager.py   # Model load/unload/switch singleton
-│   ├── session_store.py   # SQLite session/message persistence
-│   └── requirements.txt   # Python dependencies
-├── frontend/
-│   ├── src/
-│   │   ├── components/    # Reusable UI components
-│   │   │   ├── Sidebar.tsx
-│   │   │   ├── ModelSwitcher.tsx
-│   │   │   ├── ChatMessage.tsx
-│   │   │   └── ChatInput.tsx
-│   │   ├── views/         # Full-page views
-│   │   │   ├── ChatView.tsx
-│   │   │   ├── CompareView.tsx
-│   │   │   ├── ModelsView.tsx
-│   │   │   └── SessionsView.tsx
-│   │   ├── hooks/
-│   │   │   └── useWebSocket.ts
-│   │   ├── lib/
-│   │   │   ├── api.ts     # REST client
-│   │   │   └── types.ts   # Shared TypeScript types
-│   │   ├── App.tsx         # Root component
-│   │   ├── main.tsx        # Entry point
-│   │   └── index.css       # Design tokens + global styles
-│   ├── src-tauri/          # Tauri desktop shell (Rust)
-│   ├── vite.config.ts
-│   └── package.json
-├── dev.sh                  # Development launcher
-└── README.md               # This file
-```
+### Models
 
-## API Reference
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/models` | Recommended, installed, and current model state |
+| `GET` | `/models/search` | Opt-in Hugging Face discovery |
+| `GET` | `/models/{owner}/{repo}/details` | Revision-aware descriptive metadata |
+| `POST` | `/models/preflight` | Resolve a revision and check access, runtime, artifacts, memory, disk, and cache |
+| `POST` | `/models/load` | Load a model revision into the singleton runtime |
+| `POST` | `/models/unload` | Release the current runtime |
+| `GET` | `/models/current` | Current model, backend, revision, and status |
+| `WS` | `/ws/models/install` | Install the exact preflighted artifact plan without loading it |
+| `WS` | `/ws/models/load` | Stream runtime load progress |
 
-### REST Endpoints
+### Projects and comparisons
 
-| Method | Path | Description |
-|--------|------|-------------|
-| GET | `/models` | List recommended + cached models |
-| POST | `/models/load` | Load a model (`{model_id, backend?}`) |
-| POST | `/models/unload` | Unload current model |
-| GET | `/models/current` | Get currently loaded model info |
-| GET | `/sessions` | List sessions (paginated) |
-| POST | `/sessions` | Create session (`{title, is_compare?}`) |
-| GET | `/sessions/:id` | Get session by ID |
-| DELETE | `/sessions/:id` | Delete session |
-| PATCH | `/sessions/:id` | Update session title |
-| POST | `/sessions/:id/fork` | Fork session (`{from_position}`) |
-| GET | `/sessions/:id/messages` | Get messages for session |
-| GET | `/sessions/search?q=` | Full-text search sessions |
-| GET | `/health` | Health check |
+| Method | Path | Purpose |
+|---|---|---|
+| `GET/POST` | `/projects` | List or create projects |
+| `GET` | `/projects/{id}` | Project counts and metadata |
+| `GET/POST` | `/sessions` | Filter or create project-owned sessions |
+| `GET/PATCH/DELETE` | `/sessions/{id}` | Read, rename, or delete a session |
+| `GET` | `/sessions/{id}/messages` | Restore durable turns and outcomes |
+| `POST` | `/sessions/{id}/fork` | Preserve history while branching an experiment |
+| `WS` | `/ws/compare` | Run a shared prompt sequentially across a pinned ordered lineup |
 
-### WebSocket: Chat (`/ws/chat`)
+New comparison lineups must provide a full immutable Hugging Face commit SHA for every model. Existing unpinned legacy sessions remain readable through a constrained migration path.
 
-**Client → Server:**
-```json
-{"type": "message", "content": "...", "session_id": "...", "model_id": "..."}
-{"type": "tool_response", "approved": true}
+Browser access is restricted to the configured Vite and Tauri origins; native and CLI clients without an `Origin` header remain supported.
+
+## Project structure
+
+```text
+ui/backend/
+├── model_preflight.py    # Hub access, revision, artifact, cache, memory, disk
+├── model_installer.py    # Pinned install-only downloads
+├── model_manager.py      # Sequential MLX / Transformers runtime
+├── session_store.py      # Projects and durable comparison history
+└── server.py             # Trusted local product API
+
+ui/frontend/src/
+├── views/CompareView.tsx
+├── views/ModelsView.tsx
+├── components/ModelDetailsDrawer.tsx
+├── contexts/DownloadsContext.tsx
+└── lib/                  # API, domain types, and transfer identity
 ```
 
-**Server → Client:**
-```json
-{"type": "token", "data": "..."}
-{"type": "tool_call", "tool": "...", "args": {...}, "needs_confirmation": true}
-{"type": "tool_result", "result": "...", "tool": "...", "args": {...}}
-{"type": "done", "response": "...", "tokens": 147, "time_ms": 2300, "session_id": "..."}
-{"type": "session_created", "session_id": "...", "title": "..."}
-{"type": "error", "message": "..."}
-```
+## Local data
 
-### WebSocket: Compare (`/ws/compare`)
-
-**Client → Server:**
-```json
-{"type": "message", "content": "...", "models": ["model_a", "model_b"]}
-```
-
-**Server → Client** (per model, identified by `index`):
-```json
-{"type": "model_start", "model_id": "...", "index": 0}
-{"type": "token", "data": "...", "model_id": "...", "index": 0}
-{"type": "model_done", "model_id": "...", "index": 0, "response": "...", "tokens": 147, "time_ms": 2300}
-{"type": "compare_done", "session_id": "..."}
-```
-
-## Data Storage
-
-- **Sessions & messages:** `~/.llm_harness/sessions.db` (SQLite with WAL mode)
-- **Model cache:** `~/.cache/huggingface/hub/` (standard HuggingFace cache)
-- **User memory:** `~/.llm_harness/memory.json` (shared with CLI)
-
-## Design System
-
-The UI uses an intentional dark palette inspired by Linear, Raycast, and Warp:
-
-- **Icons:** Lucide React (no emoji)
-- **Colors:** CSS custom properties defined in `index.css`
-- **Typography:** System sans-serif for UI, monospace for code
-- **Motion:** 120-180ms transitions with ease-out easing
-- **Model colors:** Persistent per-model color assignment from an 8-color palette
+- Project and comparison history: `~/.llm_harness/sessions.db`
+- Hugging Face model cache: `~/.cache/huggingface/hub/`
+- Optional Hub credential: `HF_TOKEN` in Settings or the repository-local `.env`

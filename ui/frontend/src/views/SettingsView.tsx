@@ -1,9 +1,11 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Eye, EyeOff, Check, AlertCircle } from "lucide-react";
+import { apiKeys as apiKeysApi } from "../lib/api";
+import type { ApiKeyName, MaskedApiKeys } from "../lib/types";
 
 interface ApiKey {
   key: string;
-  envVar: string;
+  envVar: ApiKeyName;
   label: string;
   description: string;
   placeholder: string;
@@ -28,42 +30,108 @@ const API_KEYS: ApiKey[] = [
 
 export function SettingsView() {
   const [keys, setKeys] = useState<Record<string, string>>({});
+  const [maskedKeys, setMaskedKeys] = useState<Record<string, string>>({});
   const [visibility, setVisibility] = useState<Record<string, boolean>>({});
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+  const [revealing, setRevealing] = useState<Record<string, boolean>>({});
+  const [dirty, setDirty] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState<Record<string, boolean>>({});
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const dirtyRef = useRef<Record<string, boolean>>({});
 
-  // Load current keys on mount
   useEffect(() => {
-    fetch("/api/settings/keys")
-      .then((r) => r.json())
-      .then((data) => setKeys(data))
+    let cancelled = false;
+    apiKeysApi.list()
+      .then((data: MaskedApiKeys) => {
+        if (cancelled) return;
+        setKeys(data);
+        setMaskedKeys(data);
+      })
       .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const handleSave = async (envVar: string, value: string) => {
+  const setKeyDirty = (envVar: ApiKeyName, isDirty: boolean) => {
+    dirtyRef.current[envVar] = isDirty;
+    setDirty((current) => ({ ...current, [envVar]: isDirty }));
+  };
+
+  const handleChange = (envVar: ApiKeyName, value: string) => {
+    setKeys((current) => ({ ...current, [envVar]: value }));
+    setKeyDirty(envVar, true);
+    setSaved((current) => ({ ...current, [envVar]: false }));
+    setErrors((current) => ({ ...current, [envVar]: "" }));
+  };
+
+  const handleToggleVisibility = async (apiKey: ApiKey) => {
+    const { key, envVar } = apiKey;
+    if (visibility[key]) {
+      setVisibility((current) => ({ ...current, [key]: false }));
+      if (revealed[envVar] && !dirtyRef.current[envVar]) {
+        setKeys((current) => ({
+          ...current,
+          [envVar]: maskedKeys[envVar] || "",
+        }));
+        setRevealed((current) => ({ ...current, [envVar]: false }));
+      }
+      return;
+    }
+
+    if (dirtyRef.current[envVar]) {
+      setVisibility((current) => ({ ...current, [key]: true }));
+      return;
+    }
+
+    setRevealing((current) => ({ ...current, [envVar]: true }));
+    setErrors((current) => ({ ...current, [envVar]: "" }));
     try {
-      const res = await fetch("/api/settings/keys", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ key: envVar, value }),
-      });
-      if (!res.ok) throw new Error("Failed to save");
+      const result = await apiKeysApi.reveal(envVar);
+      if (dirtyRef.current[envVar]) return;
+      setKeys((current) => ({ ...current, [envVar]: result.value }));
+      setRevealed((current) => ({ ...current, [envVar]: true }));
+      setVisibility((current) => ({ ...current, [key]: true }));
+    } catch (error) {
+      setErrors((current) => ({
+        ...current,
+        [envVar]: error instanceof Error ? error.message : "Failed to reveal",
+      }));
+    } finally {
+      setRevealing((current) => ({ ...current, [envVar]: false }));
+    }
+  };
+
+  const handleSave = async (envVar: ApiKeyName, value: string) => {
+    try {
+      const result = await apiKeysApi.save(envVar, value);
+      setKeys((current) => ({ ...current, [envVar]: result.masked }));
+      setMaskedKeys((current) => ({ ...current, [envVar]: result.masked }));
+      setVisibility((current) => ({
+        ...current,
+        [API_KEYS.find((item) => item.envVar === envVar)?.key || envVar]: false,
+      }));
+      setRevealed((current) => ({ ...current, [envVar]: false }));
+      setKeyDirty(envVar, false);
       setSaved((s) => ({ ...s, [envVar]: true }));
       setErrors((e) => ({ ...e, [envVar]: "" }));
       setTimeout(() => setSaved((s) => ({ ...s, [envVar]: false })), 2000);
-    } catch (err) {
-      setErrors((e) => ({ ...e, [envVar]: "Failed to save" }));
+    } catch (error) {
+      setErrors((e) => ({
+        ...e,
+        [envVar]: error instanceof Error ? error.message : "Failed to save",
+      }));
     }
   };
 
   return (
-    <div style={{ flex: 1, overflowY: "auto", padding: "32px 24px" }}>
-      <div style={{ maxWidth: 560 }}>
-        <h1 style={{ fontSize: 18, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px" }}>
+    <div className="settings-view" style={{ flex: 1, overflowY: "auto", padding: "32px 24px" }}>
+      <div className="settings-inner" style={{ maxWidth: 560 }}>
+        <h1 className="settings-title" style={{ fontSize: 18, fontWeight: 600, color: "var(--text-primary)", margin: "0 0 4px" }}>
           Settings
         </h1>
         <p style={{ fontSize: 13, color: "var(--text-tertiary)", margin: "0 0 32px" }}>
-          API keys are stored in your local .env file and never sent anywhere.
+          API keys are stored locally and never leave this device.
         </p>
 
         {/* API Keys */}
@@ -82,6 +150,7 @@ export function SettingsView() {
           {API_KEYS.map((apiKey) => (
             <div
               key={apiKey.key}
+              className="settings-card"
               style={{
                 marginBottom: 20,
                 padding: "16px",
@@ -113,8 +182,9 @@ export function SettingsView() {
                   <input
                     type={visibility[apiKey.key] ? "text" : "password"}
                     value={keys[apiKey.envVar] || ""}
-                    onChange={(e) => setKeys((k) => ({ ...k, [apiKey.envVar]: e.target.value }))}
+                    onChange={(e) => handleChange(apiKey.envVar, e.target.value)}
                     placeholder={apiKey.placeholder}
+                    autoComplete="off"
                     style={{
                       width: "100%",
                       padding: "7px 36px 7px 10px",
@@ -127,11 +197,18 @@ export function SettingsView() {
                       outline: "none",
                     }}
                     onKeyDown={(e) => {
-                      if (e.key === "Enter") handleSave(apiKey.envVar, keys[apiKey.envVar] || "");
+                      if (e.key === "Enter" && dirty[apiKey.envVar]) {
+                        handleSave(apiKey.envVar, keys[apiKey.envVar] || "");
+                      }
                     }}
                   />
                   <button
-                    onClick={() => setVisibility((v) => ({ ...v, [apiKey.key]: !v[apiKey.key] }))}
+                    type="button"
+                    onClick={() => handleToggleVisibility(apiKey)}
+                    disabled={revealing[apiKey.envVar]}
+                    aria-label={visibility[apiKey.key] ? `Hide ${apiKey.label} key` : `Show ${apiKey.label} key`}
+                    aria-pressed={Boolean(visibility[apiKey.key])}
+                    title={visibility[apiKey.key] ? "Hide key" : "Show key"}
                     style={{
                       position: "absolute",
                       right: 8,
@@ -139,16 +216,19 @@ export function SettingsView() {
                       transform: "translateY(-50%)",
                       background: "none",
                       border: "none",
-                      cursor: "pointer",
+                      cursor: revealing[apiKey.envVar] ? "wait" : "pointer",
                       color: "var(--text-muted)",
                       padding: 2,
+                      opacity: revealing[apiKey.envVar] ? 0.5 : 1,
                     }}
                   >
                     {visibility[apiKey.key] ? <EyeOff size={14} /> : <Eye size={14} />}
                   </button>
                 </div>
                 <button
+                  type="button"
                   onClick={() => handleSave(apiKey.envVar, keys[apiKey.envVar] || "")}
+                  disabled={!dirty[apiKey.envVar] || revealing[apiKey.envVar]}
                   style={{
                     padding: "7px 14px",
                     background: "var(--bg-surface)",
@@ -157,7 +237,8 @@ export function SettingsView() {
                     color: "var(--text-secondary)",
                     fontSize: 12,
                     fontWeight: 500,
-                    cursor: "pointer",
+                    cursor: dirty[apiKey.envVar] ? "pointer" : "default",
+                    opacity: dirty[apiKey.envVar] ? 1 : 0.55,
                   }}
                 >
                   Save

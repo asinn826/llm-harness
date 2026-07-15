@@ -7,14 +7,14 @@
  * state loses this on unmount.
  *
  * Owns:
- * - `downloads`: Record keyed by modelId → DownloadState (progress, message)
+ * - `downloads`: Record keyed by model/backend/revision → DownloadState
  * - `currentModelId` / `currentBackend`: the one loaded model (singleton)
- * - A Map<modelId, WebSocket> for active sockets
+ * - A Map<model/backend/revision, WebSocket> for active sockets
  *
  * Exposes:
  * - startDownload(modelId, backend) — opens WS to /ws/models/load
- * - cancelDownload(modelId) — closes the WS (server-side load can't be
- *   cancelled mid-flight, but we stop listening and free the slot)
+ * - cancelDownload(modelId, backend, revision) — closes the WS. Server-side
+ *   work cannot be cancelled, so the transfer remains visibly blocked.
  * - refreshCurrent() — pulls /api/models/current
  * - subscribe(listener) — fire-and-forget notifications on completion/failure
  */
@@ -30,17 +30,24 @@ import {
 } from "react";
 import type { DownloadState } from "../lib/types";
 import { models as modelsApi, wsUrl } from "../lib/api";
+import { getTransferKey } from "../lib/transfers";
 
 export type DownloadEvent =
-  | { type: "completed"; modelId: string; backend: string }
-  | { type: "failed"; modelId: string; error: string };
+  | { type: "completed"; modelId: string; backend: "mlx" | "hf"; revision: string | null }
+  | { type: "failed"; modelId: string; revision: string | null; error: string };
 
 interface DownloadsContextValue {
   downloads: Record<string, DownloadState>;
   currentModelId: string | null;
   currentBackend: string | null;
-  startDownload: (modelId: string, backend: "mlx" | "hf") => void;
-  cancelDownload: (modelId: string) => void;
+  currentRevision: string | null;
+  startDownload: (modelId: string, backend: "mlx" | "hf", revision?: string | null) => void;
+  startInstall: (modelId: string, backend: "mlx" | "hf", revision: string) => void;
+  cancelDownload: (
+    modelId: string,
+    backend: "mlx" | "hf",
+    revision?: string | null,
+  ) => void;
   refreshCurrent: () => Promise<void>;
   subscribe: (listener: (event: DownloadEvent) => void) => () => void;
   /** Is any download currently in-flight? (Backend is single-slot.) */
@@ -53,8 +60,10 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
   const [downloads, setDownloads] = useState<Record<string, DownloadState>>({});
   const [currentModelId, setCurrentModelId] = useState<string | null>(null);
   const [currentBackend, setCurrentBackend] = useState<string | null>(null);
+  const [currentRevision, setCurrentRevision] = useState<string | null>(null);
 
   const socketsRef = useRef<Map<string, WebSocket>>(new Map());
+  const stoppedTransfersRef = useRef<Set<string>>(new Set());
   const listenersRef = useRef<Set<(e: DownloadEvent) => void>>(new Set());
 
   const notify = useCallback((event: DownloadEvent) => {
@@ -69,9 +78,11 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
       if (data.loaded && data.model_id) {
         setCurrentModelId(data.model_id);
         setCurrentBackend(data.backend ?? null);
+        setCurrentRevision(data.revision ?? null);
       } else {
         setCurrentModelId(null);
         setCurrentBackend(null);
+        setCurrentRevision(null);
       }
     } catch {
       // silently fail — UI will just show stale state
@@ -80,31 +91,56 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
 
   // Pull current model on mount
   useEffect(() => {
-    refreshCurrent();
+    const timer = window.setTimeout(() => { void refreshCurrent(); }, 0);
+    return () => window.clearTimeout(timer);
   }, [refreshCurrent]);
 
-  const cancelDownload = useCallback((modelId: string) => {
-    const ws = socketsRef.current.get(modelId);
-    if (ws) {
-      ws.close();
-      socketsRef.current.delete(modelId);
+  const cancelDownload = useCallback((
+    modelId: string,
+    backend: "mlx" | "hf",
+    revision: string | null = null,
+  ) => {
+    const transferKey = getTransferKey(modelId, backend, revision);
+    const ws = socketsRef.current.get(transferKey);
+    stoppedTransfersRef.current.add(transferKey);
+    if (ws && socketsRef.current.get(transferKey) === ws) {
+      socketsRef.current.delete(transferKey);
     }
     setDownloads((prev) => {
-      const { [modelId]: _dropped, ...rest } = prev;
-      return rest;
+      const current = prev[transferKey];
+      if (!current) return prev;
+      return {
+        ...prev,
+        [transferKey]: {
+          ...current,
+          status: "error",
+          message: "Stopped watching",
+          error: "Stopped watching. The model operation may still be running in the background.",
+        },
+      };
     });
+    ws?.close();
   }, []);
 
-  const startDownload = useCallback(
-    (modelId: string, backend: "mlx" | "hf") => {
-      // If there's already a socket for this model, don't start another.
-      if (socketsRef.current.has(modelId)) return;
+  const startTransfer = useCallback(
+    (
+      modelId: string,
+      backend: "mlx" | "hf",
+      revision: string | null,
+      operation: "install" | "load",
+    ) => {
+      const transferKey = getTransferKey(modelId, backend, revision);
+      // Do not duplicate this exact model/backend/revision operation.
+      if (socketsRef.current.has(transferKey)) return;
+      stoppedTransfersRef.current.delete(transferKey);
 
       setDownloads((prev) => ({
         ...prev,
-        [modelId]: {
+        [transferKey]: {
           modelId,
           backend,
+          revision,
+          operation,
           status: "downloading",
           progress: 0,
           message: "Connecting...",
@@ -112,66 +148,108 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
         },
       }));
 
-      const ws = new WebSocket(wsUrl("/ws/models/load"));
-      socketsRef.current.set(modelId, ws);
+      const ws = new WebSocket(wsUrl(
+        operation === "install" ? "/ws/models/install" : "/ws/models/load"
+      ));
+      socketsRef.current.set(transferKey, ws);
 
       ws.onopen = () => {
-        ws.send(JSON.stringify({ model_id: modelId, backend }));
+        ws.send(JSON.stringify({ model_id: modelId, backend, revision }));
       };
 
       ws.onmessage = (event) => {
-        let msg: any;
-        try { msg = JSON.parse(event.data); } catch { return; }
+        if (
+          stoppedTransfersRef.current.has(transferKey) ||
+          socketsRef.current.get(transferKey) !== ws
+        ) return;
+
+        let msg: {
+          type?: string;
+          progress?: number;
+          message?: string;
+          model_id?: string;
+          backend?: "mlx" | "hf";
+          revision?: string | null;
+        };
+        try { msg = JSON.parse(event.data) as typeof msg; } catch { return; }
 
         if (msg.type === "progress") {
           setDownloads((prev) => ({
             ...prev,
-            [modelId]: {
-              ...(prev[modelId] ?? { modelId, backend, startedAt: Date.now() }),
+            [transferKey]: {
+              ...(prev[transferKey] ?? { modelId, backend, revision, operation, startedAt: Date.now() }),
               modelId,
               backend,
-              status: msg.progress > 0.9 ? "loading" : "downloading",
-              progress: msg.progress,
+              revision,
+              operation,
+              status: (msg.progress ?? 0) > 0.9 ? "loading" : "downloading",
+              progress: msg.progress ?? 0,
               message: msg.message ?? "",
             } as DownloadState,
           }));
         } else if (msg.type === "done") {
-          socketsRef.current.delete(modelId);
-          setCurrentModelId(msg.model_id ?? modelId);
-          setCurrentBackend(msg.backend ?? backend);
+          if (socketsRef.current.get(transferKey) === ws) {
+            socketsRef.current.delete(transferKey);
+          }
+          if (operation === "load") {
+            setCurrentModelId(msg.model_id ?? modelId);
+            setCurrentBackend(msg.backend ?? backend);
+            setCurrentRevision(msg.revision ?? revision);
+          }
           setDownloads((prev) => {
-            const { [modelId]: _dropped, ...rest } = prev;
-            return rest;
+            const existing = prev[transferKey];
+            return {
+              ...prev,
+              [transferKey]: {
+                ...(existing ?? { modelId, backend, revision, operation, startedAt: Date.now() }),
+                modelId,
+                backend: msg.backend ?? backend,
+                revision: msg.revision ?? revision,
+                operation,
+                status: "ready",
+                progress: 1,
+                message: operation === "install" ? "Installed" : "Ready",
+              },
+            };
           });
-          notify({ type: "completed", modelId: msg.model_id ?? modelId, backend: msg.backend ?? backend });
+          notify({
+            type: "completed",
+            modelId: msg.model_id ?? modelId,
+            backend: msg.backend ?? backend,
+            revision: msg.revision ?? revision,
+          });
           ws.close();
         } else if (msg.type === "error") {
-          socketsRef.current.delete(modelId);
+          if (socketsRef.current.get(transferKey) === ws) {
+            socketsRef.current.delete(transferKey);
+          }
           setDownloads((prev) => ({
             ...prev,
-            [modelId]: {
-              ...(prev[modelId] ?? { modelId, backend, progress: 0, message: "", startedAt: Date.now() }),
+            [transferKey]: {
+              ...(prev[transferKey] ?? { modelId, backend, revision, operation, progress: 0, message: "", startedAt: Date.now() }),
               status: "error",
               error: msg.message ?? "Unknown error",
               message: msg.message ?? "Failed",
             } as DownloadState,
           }));
-          notify({ type: "failed", modelId, error: msg.message ?? "Unknown error" });
+          notify({ type: "failed", modelId, revision, error: msg.message ?? "Unknown error" });
           ws.close();
         }
       };
 
       ws.onclose = () => {
+        if (stoppedTransfersRef.current.has(transferKey)) return;
+        if (socketsRef.current.get(transferKey) !== ws) return;
         // If we get here without a done/error, treat it as a drop.
-        socketsRef.current.delete(modelId);
+        socketsRef.current.delete(transferKey);
         setDownloads((prev) => {
-          const cur = prev[modelId];
+          const cur = prev[transferKey];
           if (!cur || cur.status === "error") return prev;
           // If socket closed before completion, mark error
           if (cur.status !== "ready") {
             return {
               ...prev,
-              [modelId]: { ...cur, status: "error", error: "Connection lost", message: "Connection lost" },
+              [transferKey]: { ...cur, status: "error", error: "Connection lost", message: "Connection lost" },
             };
           }
           return prev;
@@ -183,6 +261,20 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
       };
     },
     [notify]
+  );
+
+  const startDownload = useCallback(
+    (modelId: string, backend: "mlx" | "hf", revision: string | null = null) => {
+      startTransfer(modelId, backend, revision, "load");
+    },
+    [startTransfer]
+  );
+
+  const startInstall = useCallback(
+    (modelId: string, backend: "mlx" | "hf", revision: string) => {
+      startTransfer(modelId, backend, revision, "install");
+    },
+    [startTransfer]
   );
 
   const subscribe = useCallback((listener: (e: DownloadEvent) => void) => {
@@ -198,7 +290,9 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
     downloads,
     currentModelId,
     currentBackend,
+    currentRevision,
     startDownload,
+    startInstall,
     cancelDownload,
     refreshCurrent,
     subscribe,
@@ -208,6 +302,8 @@ export function DownloadsProvider({ children }: { children: ReactNode }) {
   return <DownloadsContext.Provider value={value}>{children}</DownloadsContext.Provider>;
 }
 
+// Hook and provider intentionally share this module.
+// eslint-disable-next-line react-refresh/only-export-components
 export function useDownloads(): DownloadsContextValue {
   const ctx = useContext(DownloadsContext);
   if (!ctx) {

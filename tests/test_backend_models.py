@@ -88,7 +88,9 @@ def test_list_models_enriches_cached_only():
         assert "size_bytes" in m
         assert "size_label" in m
         assert "last_used" in m
-        assert m["tool_use_tier"] == "unknown"
+        # Loading a cached-only model may persist a positive chat-template
+        # inspection, so this remains environment-independent.
+        assert m["tool_use_tier"] in ("unknown", "likely")
 
 
 # ── _format_bytes ────────────────────────────────────────────────────────
@@ -253,6 +255,80 @@ def test_hub_search_mlx_tag_gets_mlx_hint(client):
         resp = client.get("/models/search?q=distinct-mlx-query")
         data = resp.json()
         assert data["results"][0]["backend_hint"] == "mlx"
+
+
+def test_hub_search_maps_trending_to_hub_sort_key(client):
+    with patch("huggingface_hub.HfApi") as MockApi:
+        MockApi.return_value.list_models.return_value = iter([])
+        from ui.backend.server import _search_cache
+        _search_cache.clear()
+
+        resp = client.get("/models/search?q=trend-sort-test&sort=trending")
+
+    assert resp.status_code == 200
+    kwargs = MockApi.return_value.list_models.call_args.kwargs
+    assert kwargs["sort"] == "trending_score"
+    assert "direction" not in kwargs
+
+
+# ── Model preflight endpoint ─────────────────────────────────────────────
+
+
+def test_model_preflight_endpoint_returns_service_result(client):
+    expected = {
+        "model_id": "org/model",
+        "backend": "hf",
+        "requested_revision": "release-v1",
+        "resolved_revision": "immutable-sha",
+        "access": "public",
+        "compatible": True,
+        "compatibility_code": "compatible",
+        "runtime_available": True,
+        "runtime_code": "available",
+        "runtime_message": None,
+        "model_size_bytes": 123,
+        "estimated_memory_bytes": 456,
+        "available_memory_bytes": 789,
+        "memory_fit": "fits",
+        "cache_status": "partial",
+        "can_load": True,
+        "error": None,
+    }
+    with patch("ui.backend.server.preflight_model", return_value=expected) as service:
+        resp = client.post("/models/preflight", json={
+            "model_id": "org/model",
+            "backend": "hf",
+            "revision": "release-v1",
+        })
+
+    assert resp.status_code == 200
+    assert resp.json() == expected
+    service.assert_called_once_with(
+        "org/model", backend="hf", revision="release-v1"
+    )
+
+
+def test_model_preflight_endpoint_surfaces_structured_error(client):
+    from ui.backend.model_preflight import ModelPreflightError
+
+    error = ModelPreflightError(
+        "hub_unreachable",
+        "Could not reach Hugging Face: network down",
+        retryable=True,
+        http_status=503,
+    )
+    with patch("ui.backend.server.preflight_model", side_effect=error):
+        resp = client.post("/models/preflight", json={
+            "model_id": "org/model",
+            "revision": "main",
+        })
+
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == {
+        "code": "hub_unreachable",
+        "message": "Could not reach Hugging Face: network down",
+        "retryable": True,
+    }
 
 
 # ── Path-traversal guard ──────────────────────────────────────────────────

@@ -72,8 +72,8 @@ export function ChatView({ sessionId, onSessionCreated, onTitleUpdated, currentM
   // Load messages for existing session
   useEffect(() => {
     if (!sessionId) {
-      setMessages([]);
-      return;
+      const timer = window.setTimeout(() => setMessages([]), 0);
+      return () => window.clearTimeout(timer);
     }
     sessionsApi.messages(sessionId).then((msgs) => {
       setMessages(

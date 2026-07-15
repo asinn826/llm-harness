@@ -62,10 +62,10 @@ start_backend() {
 cleanup() {
     echo -e "\n${DIM}Shutting down...${RESET}"
     # Kill all child processes of this script
-    pkill -P $$ 2>/dev/null
+    pkill -P $$ 2>/dev/null || true
     sleep 0.3
     # Force kill anything still alive
-    pkill -9 -P $$ 2>/dev/null
+    pkill -9 -P $$ 2>/dev/null || true
     # Also kill by stored PIDs in case pkill missed them
     for pid in "${PIDS[@]}"; do
         kill -9 "$pid" 2>/dev/null
@@ -74,23 +74,23 @@ cleanup() {
     # child, and the worker's PID isn't in PIDS. If the parent dies ungracefully
     # the worker (or a closed-socket zombie parent) can squat on :8000 and
     # break the next launch with a silent ECONNREFUSED from Vite.
-    pkill -9 -f 'uvicorn ui.backend.server:app' 2>/dev/null
-    wait 2>/dev/null
+    pkill -9 -f 'uvicorn ui.backend.server:app' 2>/dev/null || true
+    wait 2>/dev/null || true
     echo -e "${DIM}Done.${RESET}"
 }
 
 # If a previous run left a uvicorn zombie on :8000, the new backend will fail
 # to bind and Vite's proxy will silently ECONNREFUSED. Clear it up front.
 preflight_port_8000() {
-    if lsof -iTCP:8000 -sTCP:LISTEN -t 2>/dev/null | head -1 >/dev/null || \
+    if lsof -iTCP:8000 -sTCP:LISTEN -t >/dev/null 2>&1 || \
        pgrep -f 'uvicorn ui.backend.server:app' >/dev/null 2>&1; then
         echo -e "${DIM}Clearing stale process on :8000...${RESET}"
-        pkill -9 -f 'uvicorn ui.backend.server:app' 2>/dev/null
+        pkill -9 -f 'uvicorn ui.backend.server:app' 2>/dev/null || true
         # Also kill anything still bound to 8000 (e.g. closed-socket zombie).
         local stuck
         stuck=$(lsof -iTCP:8000 -t 2>/dev/null)
         if [ -n "$stuck" ]; then
-            kill -9 $stuck 2>/dev/null
+            kill -9 $stuck 2>/dev/null || true
         fi
         sleep 0.3
     fi
