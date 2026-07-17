@@ -1,148 +1,59 @@
 # LLM Harness
 
-A local, comparison-first workbench for running freely downloadable Hugging Face language models side by side.
+A local desktop workbench for running freely available Hugging Face language models side by side.
 
-The desktop product is organized around projects and durable comparison threads. Add two or three compatible models, resolve each Hub revision to an immutable commit, install the runnable artifacts, send one shared prompt, and compare the persisted outcomes in aligned columns.
+LLM Harness makes comparison the primary workflow: choose two or three models, send the same prompt to each, and keep the results in durable project history. Model revisions are pinned so a comparison can be reopened with the same lineup later.
 
-Current product principles:
+## What it does
 
-- Comparison is the default workflow; general agent chat is legacy functionality.
-- Hugging Face models are checked for access, runtime support, weight format, exact download size, local cache completeness, and memory fit before installation.
-- Model revisions are pinned to commit SHAs through install, execution, and restored history.
-- Comparisons run sequentially with the same tool registry and iterative harness loop for every model.
-- Projects own durable multi-turn comparison history and fixed ordered lineups.
+- Finds and installs compatible Hugging Face models from inside the app.
+- Checks access, runtime support, download size, disk space, memory fit, and local cache state before installation.
+- Runs the same multi-turn conversation across a fixed model lineup.
+- Preserves per-model responses, latency, token counts, and comparison history.
 
-## Desktop App (UI)
+## Quick start
 
-A native desktop app with Hugging Face discovery, preflighted model installation, project-scoped history, and side-by-side comparison.
-
-### Prerequisites
-
-- **Python 3.11+**: `brew install python@3.11`
-- **Node.js 20+**: `brew install node`
-- **Rust** (for native window): `curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`
-
-### Setup
+Requires Python 3.11+, Node.js 20+, and Rust for the native Tauri window.
 
 ```bash
-# Python dependencies
-pip3.11 install -r requirements.txt
-pip3.11 install -r ui/backend/requirements.txt
-
-# Frontend dependencies (includes the Tauri CLI)
+python3.11 -m pip install -r requirements.txt
+python3.11 -m pip install -r ui/backend/requirements.txt
 cd ui/frontend && npm install && cd ../..
+
+./ui/dev.sh
 ```
 
-If you don't have `python3.11` on your PATH, substitute `python3 -m pip` / `python3` — `ui/dev.sh` auto-detects `python3.11` and falls back to `python3`.
+Use `./ui/dev.sh --browser` to run without the native window.
 
-### Launch
-
-```bash
-./ui/dev.sh                # native desktop window (requires Rust)
-./ui/dev.sh --browser      # fallback: opens in your browser
-```
-
-The app starts a FastAPI backend on port 8000 and a Tauri native window (or browser at localhost:5173). Start a comparison, add models from the local library or Hub, and run a shared prompt once at least two pinned models are ready.
-
-### Comparison workflow
+## Run a comparison
 
 1. Select or create a project.
-2. Start a comparison and choose **Browse Hugging Face models**.
-3. Open a model to run preflight. You can choose `main`, a tag, or a commit; the harness records the resolved commit SHA.
-4. Select **Install & add**. Installation downloads only the selected runnable weight family and does not allocate the model into memory.
-5. Add a second or third model, return to the comparison, and send the shared prompt.
-6. Compare each model's tool calls, results, and final answer in its own column.
-7. Reopen the comparison later to continue with the same fixed lineup and per-model conversation histories.
+2. Browse Hugging Face and open a model to check compatibility.
+3. Install and add two or three models to the lineup.
+4. Send a shared prompt, compare the responses, and reopen the thread later to continue.
 
-### Troubleshooting
+Comparisons execute one model at a time so they work within local accelerator limits while keeping the prompt and conversation history consistent.
 
-- **`python3.11: command not found`** — You don't have 3.11 installed. Either `brew install python@3.11`, or run with plain `python3` (the launcher falls back automatically). Note that the `requirements.txt` comments still say `pip3.11`; substitute `python3 -m pip` if needed.
-- **`ModuleNotFoundError: No module named 'fastapi'`** — Backend deps not installed under the Python version `dev.sh` picked. Run `python3 -m pip install -r ui/backend/requirements.txt` (or `pip3.11 ...` if using 3.11). Easy to miss if you only installed the root `requirements.txt`.
-- **`npm error could not determine executable to run`** after "Launching desktop app..." — The Tauri CLI wasn't installed. Run `npm install` inside `ui/frontend/` again; `@tauri-apps/cli@^2` is a devDependency and should pull in on install.
-- **`Rust not found`** from `check_rust` — Install Rust (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`) or skip the native window with `./ui/dev.sh --browser`.
-- **"Ready. Native window should open shortly." prints, then nothing** — `dev.sh` backgrounds the backend and frontend and prints the banner unconditionally; if either child errors, scroll up — the real failure is above the banner.
-- **Vite spams `http proxy error: /models ECONNREFUSED`** — Something is squatting on :8000 (usually a uvicorn reloader from a previous run that didn't shut down cleanly). `dev.sh` now auto-clears it on launch; to do it manually: `pkill -9 -f 'uvicorn ui.backend.server'` then re-run.
+## Model access
 
-### Build standalone .app
+Public models require no account. For gated models, accept the model terms on Hugging Face and add an `HF_TOKEN` in Settings or a local `.env` file.
 
-One command bundles Python + FastAPI + MLX + the React frontend into a self-contained `LLM Harness.app` that needs no Python or Node install:
+The development app supports compatible MLX and Transformers repositories. The packaged macOS app is currently MLX-only.
+
+## Build and verify
 
 ```bash
-./ui/build.sh            # build into src-tauri/target/release/bundle/
-./ui/build.sh --install  # also copy to /Applications
-```
+./ui/build.sh                  # build the macOS app
+./ui/build.sh --install        # optionally install it
 
-Final size: ~93 MB. MLX-only — the HF backend is stripped to keep the binary small. Pipeline:
-
-1. `vite build` the frontend
-2. PyInstaller bundles the Python backend as a Tauri sidecar binary
-3. `tauri build` produces the `.app` (and a `.dmg` next to it)
-4. `codesign --sign -` with ad-hoc signature (avoids Gatekeeper warning on your own machine)
-
-First launch takes ~7s — PyInstaller unpacks once to a temp dir, subsequent launches are fast.
-
-### macOS permissions
-
-The app checks permissions on startup and shows a banner if anything is missing:
-
-- **Full Disk Access** — needed to read iMessage/calendar databases. System Settings → Privacy & Security → Full Disk Access → add Terminal (or python3.11).
-- **Automation** — needed to send messages and create calendar events. Granted automatically on first use via system dialog.
-
-See [ui/README.md](ui/README.md) for architecture details, API reference, and project structure.
-
----
-
-## Model compatibility
-
-LLM Harness supports compatible text-input repositories that the installed MLX or Transformers runtime can load, including supported causal and conditional-generation architectures. Preflight blocks incompatible architectures, GGUF-only repositories, custom remote code, missing local runtimes, and models that will not fit the machine. It does not claim universal Hugging Face compatibility.
-
-The curated starters are deliberately small, public, Apache-2.0 models hosted on Hugging Face and converted for MLX:
-
-| Model | Runtime | Weight download | Purpose |
-|---|---|---:|---|
-| `mlx-community/Qwen2.5-0.5B-Instruct-4bit` | MLX | ~265 MB | Fast default with strong instruction following |
-| `mlx-community/SmolLM2-360M-Instruct` | MLX | ~690 MB | Lightweight second opinion |
-| `mlx-community/SmolLM2-1.7B-Instruct` | MLX | ~3.2 GB | Higher-capacity comparison candidate |
-
-Catalog entries are discovery shortcuts, not version locks. Every selected model is resolved and persisted at an immutable Hub commit before a comparison starts.
-
-## Hugging Face access
-
-Public models need no account. For a gated model, accept its terms on Hugging Face and add `HF_TOKEN` in Settings or in a local `.env` file:
-
-```text
-HF_TOKEN=hf_...
-```
-
-The product shows access failures during preflight, before installation begins.
-
-## Legacy CLI
-
-The original terminal agent remains available for compatibility:
-
-```bash
-python3.11 main.py
-```
-
-It is maintenance-mode functionality, not the product direction. The desktop comparison uses the same bounded tool loop and shows observable calls and results per model. Hidden chain-of-thought text is not displayed.
-
-## Verification
-
-```bash
 python3.11 -m pytest -q
 cd ui/frontend
 npm run lint
 npm run build
 ```
 
-## Structure
+## More
 
-| Path | Purpose |
-|---|---|
-| `ui/backend/model_preflight.py` | Hub revision, access, compatibility, artifact, cache, and fit checks |
-| `ui/backend/model_installer.py` | Exact-revision, install-only Hub downloads |
-| `ui/backend/session_store.py` | Projects, comparison lineups, turns, outcomes, and migrations |
-| `ui/backend/server.py` | Local REST and WebSocket product API |
-| `ui/frontend/src/views/CompareView.tsx` | Side-by-side comparison and restored history |
-| `ui/frontend/src/views/ModelsView.tsx` | Installed library and Hugging Face discovery |
-| `main.py`, `harness.py`, `cli.py`, `tools.py` | Legacy terminal agent stack |
+- [UI architecture and API reference](ui/README.md)
+- [Comparison-first product design](docs/superpowers/specs/2026-07-13-comparison-first-product-design.md)
+- Legacy terminal interface: `python3.11 main.py`
