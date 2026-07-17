@@ -9,7 +9,7 @@ Current product principles:
 - Comparison is the default workflow; general agent chat is legacy functionality.
 - Hugging Face models are checked for access, runtime support, weight format, exact download size, local cache completeness, and memory fit before installation.
 - Model revisions are pinned to commit SHAs through install, execution, and restored history.
-- Comparisons run sequentially with a shared tool-free prompt so local accelerator limits do not compromise the experiment.
+- Comparisons run sequentially with the same tool registry and iterative harness loop for every model.
 - Projects own durable multi-turn comparison history and fixed ordered lineups.
 
 ## Desktop App (UI)
@@ -51,7 +51,8 @@ The app starts a FastAPI backend on port 8000 and a Tauri native window (or brow
 3. Open a model to run preflight. You can choose `main`, a tag, or a commit; the harness records the resolved commit SHA.
 4. Select **Install & add**. Installation downloads only the selected runnable weight family and does not allocate the model into memory.
 5. Add a second or third model, return to the comparison, and send the shared prompt.
-6. Reopen the comparison later to continue with the same fixed lineup and per-model conversation histories.
+6. Compare each model's tool calls, results, and final answer in its own column.
+7. Reopen the comparison later to continue with the same fixed lineup and per-model conversation histories.
 
 ### Troubleshooting
 
@@ -93,7 +94,7 @@ See [ui/README.md](ui/README.md) for architecture details, API reference, and pr
 
 ## Model compatibility
 
-LLM Harness supports compatible text-generation repositories with causal-language-model weights. Preflight blocks unsupported tasks, GGUF-only repositories, custom remote code, missing local runtimes, and models that will not fit the machine. It does not claim universal Hugging Face compatibility.
+LLM Harness supports compatible text-input repositories that the installed MLX or Transformers runtime can load, including supported causal and conditional-generation architectures. Preflight blocks incompatible architectures, GGUF-only repositories, custom remote code, missing local runtimes, and models that will not fit the machine. It does not claim universal Hugging Face compatibility.
 
 The curated starters are deliberately small, public, Apache-2.0 models hosted on Hugging Face and converted for MLX:
 
@@ -117,13 +118,13 @@ The product shows access failures during preflight, before installation begins.
 
 ## Legacy CLI
 
-The original tool-enabled terminal agent remains available for compatibility:
+The original terminal agent remains available for compatibility:
 
 ```bash
 python3.11 main.py
 ```
 
-It is maintenance-mode functionality, not the product direction. General agent chat, iMessage/calendar actions, tool calling, and chain-of-thought controls are intentionally outside the comparison-first desktop workflow.
+It is maintenance-mode functionality, not the product direction. The desktop comparison uses the same bounded tool loop and shows observable calls and results per model. Hidden chain-of-thought text is not displayed.
 
 ## Verification
 

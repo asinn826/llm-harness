@@ -36,6 +36,9 @@ TIGHT_MEMORY_FRACTION = 0.8
 DISK_SAFETY_BYTES = 256 * 1024 ** 2
 
 _SUPPORTED_PIPELINES = {"text-generation"}
+_HF_TEXT_INPUT_PIPELINES = {"any-to-any", "image-text-to-text"}
+_MLX_QWEN35_ARCHITECTURE = "Qwen3_5ForConditionalGeneration"
+_MLX_QWEN35_MODULE = "mlx_lm.models.qwen3_5"
 _WEIGHT_SUFFIXES = {
     "hf": (".safetensors", ".bin"),
     "mlx": (".safetensors", ".npz"),
@@ -208,6 +211,33 @@ def _module_available(module_name: str) -> bool:
         return False
 
 
+def _hf_causal_loader_supports(
+    architectures: list[Any],
+    config: dict[str, Any],
+) -> bool:
+    """Return whether AutoModelForCausalLM supports this model configuration.
+
+    Some multimodal repositories use a conditional-generation architecture
+    even when invoked with text alone. Their Hub pipeline tag describes the
+    full modality range, and AutoModel selects its concrete causal class from
+    ``model_type`` rather than requiring the Hub architecture name to match.
+    """
+    model_type = str(config.get("model_type") or "")
+    if model_type:
+        try:
+            from transformers.models.auto.modeling_auto import (
+                MODEL_FOR_CAUSAL_LM_MAPPING_NAMES,
+            )
+
+            mapped = MODEL_FOR_CAUSAL_LM_MAPPING_NAMES.get(model_type)
+            if mapped:
+                return True
+        except (ImportError, ModuleNotFoundError):
+            pass
+
+    return any(str(name).endswith("ForCausalLM") for name in architectures)
+
+
 def _runtime_availability(backend: str) -> tuple[bool, str, Optional[str]]:
     """Return whether the selected local runtime can actually be invoked."""
     if backend == "mlx":
@@ -340,14 +370,27 @@ def _compatibility(
     tags: list[str],
     config: dict[str, Any],
 ) -> tuple[bool, str, Optional[str]]:
-    if pipeline_tag and pipeline_tag not in _SUPPORTED_PIPELINES:
+    architectures = list(config.get("architectures") or [])
+    mlx_identity = "mlx" in tags or model_id.lower().startswith("mlx-community/")
+    mlx_qwen35_text_model = (
+        backend == "mlx"
+        and mlx_identity
+        and config.get("model_type") == "qwen3_5"
+        and _MLX_QWEN35_ARCHITECTURE in architectures
+    )
+    supported_pipeline = (
+        pipeline_tag in _SUPPORTED_PIPELINES
+        or (backend == "hf" and pipeline_tag in _HF_TEXT_INPUT_PIPELINES)
+    ) or (
+        pipeline_tag == "image-text-to-text" and mlx_qwen35_text_model
+    )
+    if pipeline_tag and not supported_pipeline:
         return (
             False,
             "unsupported_task",
-            f"This repository is for '{pipeline_tag}', not text generation.",
+            f"The '{pipeline_tag}' task is not supported by this prompt runner.",
         )
 
-    mlx_identity = "mlx" in tags or model_id.lower().startswith("mlx-community/")
     if backend == "mlx" and not mlx_identity:
         return (
             False,
@@ -368,8 +411,17 @@ def _compatibility(
             "This repository requires custom remote code, which the harness does not execute.",
         )
 
-    architectures = list(config.get("architectures") or [])
-    if architectures and not any(str(name).endswith("ForCausalLM") for name in architectures):
+    if mlx_qwen35_text_model and not _module_available(_MLX_QWEN35_MODULE):
+        return (
+            False,
+            "runtime_unsupported_model_type",
+            "Update mlx-lm to 0.30.7 or newer to use Qwen3.5 models.",
+        )
+
+    supported_architecture = mlx_qwen35_text_model or (
+        backend == "hf" and _hf_causal_loader_supports(architectures, config)
+    ) or any(str(name).endswith("ForCausalLM") for name in architectures)
+    if architectures and not supported_architecture:
         return (
             False,
             "unsupported_architecture",

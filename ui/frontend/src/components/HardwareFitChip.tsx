@@ -82,7 +82,7 @@ export function HardwareFitChip({ model }: { model: ModelInfo }) {
         display: "inline-flex",
         alignItems: "center",
         gap: 3,
-        fontSize: 10,
+        fontSize: 12,
         padding: "1px 6px",
         borderRadius: 3,
         background: bg,

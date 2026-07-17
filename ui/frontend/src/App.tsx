@@ -7,8 +7,8 @@ import { ChatView } from "./views/ChatView";
 import { CompareView } from "./views/CompareView";
 import { ModelsView } from "./views/ModelsView";
 import { SettingsView } from "./views/SettingsView";
-import { projects as projectsApi } from "./lib/api";
-import type { ComparisonModelInput, Project, Session } from "./lib/types";
+import { getErrorMessage, projects as projectsApi } from "./lib/api";
+import type { ComparisonModelInput, Project, Session, SessionVisualState } from "./lib/types";
 
 type View = "chat" | "compare" | "models" | "settings";
 const ACTIVE_PROJECT_KEY = "llm-harness.active-project";
@@ -31,24 +31,33 @@ function AppInner() {
   const [draftLineup, setDraftLineup] = useState<ComparisonModelInput[]>([]);
   const [modelBrowserMode, setModelBrowserMode] = useState<"browse" | "add-to-comparison">("browse");
   const [projects, setProjects] = useState<Project[]>([]);
+  const [projectLoadError, setProjectLoadError] = useState<string | null>(null);
+  const [projectRefreshKey, setProjectRefreshKey] = useState(0);
   const [activeProjectId, setActiveProjectId] = useState(
     () => window.localStorage.getItem(ACTIVE_PROJECT_KEY) || "default"
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sessionRefreshKey, setSessionRefreshKey] = useState(0);
+  const [sessionStates, setSessionStates] = useState<Record<string, SessionVisualState>>({});
   const [missingAutomation, setMissingAutomation] = useState(false);
   const [missingFullDisk, setMissingFullDisk] = useState(false);
 
   useEffect(() => {
+    let active = true;
     projectsApi.list().then((items) => {
+      if (!active) return;
+      setProjectLoadError(null);
       setProjects(items);
       setActiveProjectId((current) =>
         items.length > 0 && !items.some((project) => project.id === current)
           ? items[0].id
           : current
       );
-    }).catch(() => {});
-  }, []);
+    }).catch((error) => {
+      if (active) setProjectLoadError(getErrorMessage(error, "Couldn’t load projects."));
+    });
+    return () => { active = false; };
+  }, [projectRefreshKey]);
 
   useEffect(() => {
     window.localStorage.setItem(ACTIVE_PROJECT_KEY, activeProjectId);
@@ -80,6 +89,12 @@ function AppInner() {
     setActiveSessionKind(kind);
     if (kind === "compare") setComparisonSurfaceKey((key) => key + 1);
     setCurrentView(kind);
+    setSessionStates((current) => {
+      if (current[session.id] !== "unread") return current;
+      const next = { ...current };
+      delete next[session.id];
+      return next;
+    });
   }, []);
 
   const handleCompareSessionCreated = useCallback((id: string) => {
@@ -102,6 +117,15 @@ function AppInner() {
 
   const handleComparisonComplete = useCallback(() => {
     setSessionRefreshKey((key) => key + 1);
+  }, []);
+
+  const handleComparisonRunState = useCallback((sessionId: string, state: SessionVisualState | null) => {
+    setSessionStates((current) => {
+      const next = { ...current };
+      if (state) next[sessionId] = state;
+      else delete next[sessionId];
+      return next;
+    });
   }, []);
 
   const handleProjectChange = useCallback((projectId: string) => {
@@ -180,6 +204,11 @@ function AppInner() {
     setComparisonSurfaceKey((key) => key + 1);
   }, []);
 
+  const handleReloadModels = useCallback(() => {
+    setModelBrowserMode("browse");
+    setCurrentView("models");
+  }, []);
+
   return (
     <div className="app-shell" style={{ display: "flex", height: "100vh", overflow: "hidden", background: "var(--bg-primary)" }}>
       <Sidebar
@@ -194,6 +223,9 @@ function AppInner() {
         onProjectCreate={handleProjectCreate}
         collapsed={sidebarCollapsed}
         onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+        projectLoadError={projectLoadError}
+        onRetryProjects={() => setProjectRefreshKey((key) => key + 1)}
+        sessionStates={sessionStates}
         refreshKey={sessionRefreshKey}
         modelSwitcher={currentView === "chat" ? (
           <ModelSwitcher
@@ -203,7 +235,7 @@ function AppInner() {
         ) : undefined}
       />
 
-      <div className="app-main" style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, overflow: "hidden" }}>
+      <main className="app-main" style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, overflow: "hidden" }}>
         {currentView === "chat" && (missingAutomation || missingFullDisk) && (
           <PermissionsBanner
             missingAutomation={missingAutomation}
@@ -229,6 +261,7 @@ function AppInner() {
             onSessionCreated={handleCompareSessionCreated}
             onSessionDetached={handleCompareSessionDetached}
             onComparisonComplete={handleComparisonComplete}
+            onRunStateChange={handleComparisonRunState}
             onBrowseModels={handleBrowseForComparison}
           />
         )}
@@ -243,8 +276,8 @@ function AppInner() {
             onReturn={handleReturnToComparison}
           />
         )}
-        {currentView === "settings" && <SettingsView />}
-      </div>
+        {currentView === "settings" && <SettingsView onReloadModels={handleReloadModels} />}
+      </main>
     </div>
   );
 }

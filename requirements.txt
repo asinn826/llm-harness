@@ -11,5 +11,5 @@ pytest>=8.0
 # macOS only — install separately if pip can't resolve:
 #   pip3.11 install mlx-lm
 # mlx-lm pulls in its own compatible transformers version.
-mlx-lm>=0.30; sys_platform == "darwin" and python_version >= "3.11"
+mlx-lm>=0.30.7; sys_platform == "darwin" and python_version >= "3.11"
 transformers>=5.0; sys_platform != "darwin"

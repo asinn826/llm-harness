@@ -184,6 +184,8 @@ export interface Session {
   comparison_models: ComparisonModel[];
 }
 
+export type SessionVisualState = "running" | "failed" | "unread";
+
 export interface Message {
   id: string;
   session_id: string;

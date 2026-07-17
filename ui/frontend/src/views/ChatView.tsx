@@ -217,8 +217,6 @@ export function ChatView({ sessionId, onSessionCreated, onTitleUpdated, currentM
     setPendingToolCall(null);
   };
 
-  const hasMessages = messages.length > 0 || isGenerating;
-
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, height: "100%" }}>
       {/* Deleted-model banner */}
@@ -248,36 +246,20 @@ export function ChatView({ sessionId, onSessionCreated, onTitleUpdated, currentM
               color: "white",
               border: "none",
               borderRadius: 4,
-              fontSize: 11,
+              fontSize: 14,
               fontWeight: 500,
               cursor: "pointer",
               flexShrink: 0,
             }}
           >
-            <Download size={11} /> Redownload
+            <Download size={14} /> Redownload
           </button>
         </div>
       )}
 
       {/* Scrollable messages */}
       <div style={{ flex: 1, overflowY: "auto" }}>
-        {!hasMessages && (
-          <div style={{ padding: "24px", paddingTop: "40vh" }}>
-            <div style={{ color: "var(--text-tertiary)", fontSize: 14, marginBottom: 4 }}>
-              {currentModelId
-                ? `Ready — ${currentModelId.split("/").pop()}`
-                : "Load a model to start"}
-            </div>
-            <div style={{ color: "var(--text-muted)", fontSize: 12 }}>
-              {currentModelId
-                ? "Send a message to start a conversation"
-                : "Use the model switcher in the sidebar"}
-            </div>
-          </div>
-        )}
-
-        {hasMessages && (
-          <div style={{ padding: "16px 24px" }}>
+        <div style={{ padding: "16px 24px" }}>
             {messages.map((msg) => (
               <ChatMessage
                 key={msg.id}
@@ -310,8 +292,7 @@ export function ChatView({ sessionId, onSessionCreated, onTitleUpdated, currentM
             )}
 
             <div ref={messagesEndRef} />
-          </div>
-        )}
+        </div>
       </div>
 
       {/* Input bar — pinned to bottom */}

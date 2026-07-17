@@ -269,7 +269,7 @@ export function ModelDetailsDrawer({
             <div style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {modelId.split("/").pop()}
             </div>
-            <div style={{ fontSize: 11, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {modelId.split("/")[0]}
             </div>
           </div>
@@ -295,7 +295,7 @@ export function ModelDetailsDrawer({
               onClick={() => onRemoveFromComparison?.(modelId)}
               style={{ ...primaryBtn, background: "var(--success-muted)", color: "var(--success)" }}
             >
-              <Check size={12} style={{ marginRight: 6 }} /> Added to lineup
+              <Check size={12} style={{ marginRight: 6 }} /> Selected
             </button>
           )}
           {selectionMode && isSelected && needsTransferRetry && canUse && (
@@ -308,7 +308,7 @@ export function ModelDetailsDrawer({
           )}
           {selectionMode && !isSelected && preflightLoading && (
             <span style={{ display: "inline-flex", alignItems: "center", gap: 6, color: "var(--text-muted)", fontSize: 12 }}>
-              <Loader2 size={13} className="animate-spin" /> Checking compatibility…
+              <Loader2 size={13} className="animate-spin" /> Checking…
             </span>
           )}
           {selectionMode && !isSelected && !preflightLoading && canUse && !isBusy && (
@@ -316,11 +316,11 @@ export function ModelDetailsDrawer({
               onClick={handleInstallOrAdd}
               disabled={selectionFull}
               style={{ ...primaryBtn, opacity: selectionFull ? 0.45 : 1, cursor: selectionFull ? "not-allowed" : "pointer" }}
-              title={selectionFull ? "The comparison lineup already has three models" : undefined}
+              title={selectionFull ? "Three models selected" : undefined}
             >
               {exactRevisionCached && !needsTransferRetry || isReady ? <Plus size={12} style={{ marginRight: 6 }} /> : <Download size={12} style={{ marginRight: 6 }} />}
               {selectionFull
-                ? "Lineup full"
+                ? "3 selected"
                 : needsTransferRetry
                   ? "Retry install & add"
                   : exactRevisionCached || isReady
@@ -371,7 +371,7 @@ export function ModelDetailsDrawer({
             <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 10 }}>
               <Loader2 size={14} className="animate-spin" style={{ color: "var(--accent)", flexShrink: 0 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 3, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
                   {dl.message || "Loading..."}
                 </div>
                 <div style={{ height: 3, borderRadius: 2, background: "var(--bg-primary)", overflow: "hidden" }}>
@@ -396,7 +396,7 @@ export function ModelDetailsDrawer({
             style={{
               color: "var(--text-muted)", textDecoration: "none",
               display: "inline-flex", alignItems: "center", gap: 4,
-              fontSize: 11,
+              fontSize: 12,
             }}
             title="View on HuggingFace"
           >
@@ -485,12 +485,12 @@ function PreflightPanel({
       }}>
         <div style={{ padding: 12, borderBottom: "1px solid var(--border-subtle)" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 7 }}>
-            <span style={{ fontSize: 11, fontWeight: 600, color: "var(--text-primary)" }}>Run preflight</span>
+            <span style={{ fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>Revision</span>
             <span style={{ flex: 1 }} />
             {loading && <Loader2 size={12} className="animate-spin" style={{ color: "var(--accent)" }} />}
             {!loading && result && (
-              <span style={{ fontSize: 10, color: statusColor, fontWeight: 500 }}>
-                {result.can_load ? "Ready to run" : "Action required"}
+              <span style={{ fontSize: 12, color: statusColor, fontWeight: 500 }}>
+                {result.can_load ? "Ready" : "Unavailable"}
               </span>
             )}
           </div>
@@ -504,37 +504,34 @@ function PreflightPanel({
               style={{
                 flex: 1, minWidth: 0, padding: "6px 8px", borderRadius: 5,
                 border: "1px solid var(--border-default)", background: "var(--bg-primary)",
-                color: "var(--text-primary)", fontFamily: "var(--font-mono)", fontSize: 11,
+                color: "var(--text-primary)", fontFamily: "var(--font-mono)", fontSize: 12,
               }}
             />
             <button onClick={onCheck} disabled={loading} style={{
               display: "inline-flex", alignItems: "center", gap: 5,
               padding: "6px 9px", borderRadius: 5,
               border: "1px solid var(--border-default)", background: "var(--bg-tertiary)",
-              color: "var(--text-secondary)", fontSize: 11, cursor: loading ? "wait" : "pointer",
+              color: "var(--text-secondary)", fontSize: 14, cursor: loading ? "wait" : "pointer",
             }}>
               <RefreshCw size={11} /> Check
             </button>
           </div>
-          <div style={{ marginTop: 5, fontSize: 9, color: "var(--text-muted)" }}>
-            A mutable revision is resolved to an exact commit before it enters a comparison.
-          </div>
         </div>
 
         {loading && !result && (
-          <div style={{ padding: 12, fontSize: 11, color: "var(--text-muted)" }}>
-            Checking access, weights, local cache, and memory fit for {modelId}…
+          <div style={{ padding: 12, fontSize: 12, color: "var(--text-muted)" }}>
+            Checking {modelId}…
           </div>
         )}
 
         {error && (
-          <div style={{ display: "flex", gap: 7, padding: 12, color: "var(--error)", fontSize: 11, lineHeight: 1.45 }}>
+          <div style={{ display: "flex", gap: 7, padding: 12, color: "var(--error)", fontSize: 12, lineHeight: 1.45 }}>
             <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} /> {error}
           </div>
         )}
 
         {!result && !loading && !error && fallbackGated && (
-          <div style={{ padding: 12, color: "var(--warning)", fontSize: 11 }}>
+          <div style={{ padding: 12, color: "var(--warning)", fontSize: 12 }}>
             This model may require accepted terms and a Hugging Face token.
           </div>
         )}
@@ -544,8 +541,8 @@ function PreflightPanel({
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px 16px", padding: 12 }}>
               {rows.map(([label, value]) => (
                 <div key={label}>
-                  <div style={{ color: "var(--text-muted)", fontSize: 9, textTransform: "uppercase", letterSpacing: "0.04em", marginBottom: 2 }}>{label}</div>
-                  <div style={{ color: "var(--text-primary)", fontSize: 11, textTransform: label === "Local cache" ? "capitalize" : undefined }}>{value}</div>
+                  <div style={{ color: "var(--text-muted)", fontSize: 12, marginBottom: 2 }}>{label}</div>
+                  <div style={{ color: "var(--text-primary)", fontSize: 14, textTransform: label === "Local cache" ? "capitalize" : undefined }}>{value}</div>
                 </div>
               ))}
             </div>
@@ -553,7 +550,7 @@ function PreflightPanel({
               <div style={{
                 display: "flex", gap: 7, padding: "10px 12px",
                 borderTop: "1px solid var(--border-subtle)",
-                background: "var(--error-muted)", color: "var(--error)", fontSize: 11, lineHeight: 1.45,
+                background: "var(--error-muted)", color: "var(--error)", fontSize: 12, lineHeight: 1.45,
               }}>
                 <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
                 <span>{result.error.message}</span>
@@ -583,10 +580,10 @@ function OverviewTab({ details, modelId }: { details: ModelDetails; modelId: str
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "14px 20px" }}>
         {metaRows.map(([label, value]) => (
           <div key={label}>
-            <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 3 }}>
+            <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 3 }}>
               {label}
             </div>
-            <div style={{ fontSize: 12, color: "var(--text-primary)" }}>{value}</div>
+            <div style={{ fontSize: 14, color: "var(--text-primary)" }}>{value}</div>
           </div>
         ))}
       </div>
@@ -594,15 +591,11 @@ function OverviewTab({ details, modelId }: { details: ModelDetails; modelId: str
       {/* Tags */}
       {details.tags.length > 0 && (
         <div>
-          <div style={{ fontSize: 10, color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: 6 }}>
+          <div style={{ fontSize: 12, color: "var(--text-muted)", marginBottom: 4 }}>
             Tags
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
-            {details.tags.slice(0, 20).map((t) => (
-              <span key={t} style={{ fontSize: 10, padding: "2px 7px", borderRadius: 3, background: "var(--bg-elevated)", color: "var(--text-tertiary)" }}>
-                {t}
-              </span>
-            ))}
+          <div style={{ fontSize: 14, color: "var(--text-tertiary)", lineHeight: 1.5 }}>
+            {details.tags.slice(0, 20).join(", ")}
           </div>
         </div>
       )}
@@ -613,7 +606,7 @@ function OverviewTab({ details, modelId }: { details: ModelDetails; modelId: str
 function CardTab({ readme }: { readme: string }) {
   if (!readme.trim()) {
     return (
-      <div style={{ padding: 20, fontSize: 12, color: "var(--text-muted)" }}>
+      <div style={{ padding: 20, fontSize: 14, color: "var(--text-muted)" }}>
         No model card available.
       </div>
     );
@@ -621,7 +614,7 @@ function CardTab({ readme }: { readme: string }) {
   return (
     <div style={{
       padding: 20,
-      fontSize: 12,
+      fontSize: 14,
       lineHeight: 1.6,
       color: "var(--text-secondary)",
     }}>

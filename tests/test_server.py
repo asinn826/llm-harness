@@ -379,11 +379,17 @@ def test_search_sessions(client):
 
 
 class _RecordingWebSocket:
-    def __init__(self):
+    def __init__(self, incoming=None):
         self.messages = []
+        self.incoming = list(incoming or [])
 
     async def send_json(self, payload):
         self.messages.append(payload)
+
+    async def receive_text(self):
+        if not self.incoming:
+            raise AssertionError("No queued WebSocket response")
+        return json.dumps(self.incoming.pop(0))
 
 
 def test_compare_handler_persists_lineup_and_model_load_failure(mock_model_manager):
@@ -564,17 +570,36 @@ def test_compare_handler_persists_successful_model_outcome(mock_model_manager):
     assert done["tokens"] == 2
 
 
-def test_compare_treats_tool_syntax_as_plain_model_output(mock_model_manager):
+def test_compare_executes_read_only_tool_and_persists_per_model_trace(
+    mock_model_manager,
+    monkeypatch,
+):
     from ui.backend.server import _handle_compare_message
     from ui.backend.session_store import get_messages
+    from tools import TOOLS
 
-    tool_syntax = '{"tool":"run_shell","args":{"command":"echo nope"}}'
-    mock_model_manager.generate.return_value = iter([tool_syntax])
+    observed_conversations = []
+    responses = iter([
+        ['{"tool":"get_weather","args":{"location":"Seattle"}}'],
+        ["Seattle is clear and 70°F."],
+    ])
+
+    def generate(conversation):
+        observed_conversations.append([dict(message) for message in conversation])
+        return iter(next(responses))
+
+    def fake_weather(location=""):
+        assert location == "Seattle"
+        return "Weather in Seattle: Clear, 70°F"
+
+    fake_weather.needs_confirmation = False
+    monkeypatch.setitem(TOOLS, "get_weather", fake_weather)
+    mock_model_manager.generate.side_effect = generate
     ws = _RecordingWebSocket()
 
     asyncio.run(_handle_compare_message(ws, {
         "type": "message",
-        "content": "Compare without tools",
+        "content": "What's the weather in Seattle?",
         "models": [{"model_id": "org/model", "revision": PINNED_A}],
         "project_id": "default",
     }))
@@ -584,9 +609,75 @@ def test_compare_treats_tool_syntax_as_plain_model_output(mock_model_manager):
         for message in ws.messages
         if message["type"] == "session_created"
     )
-    assert get_messages(session_id)[-1]["content"] == tool_syntax
-    assert not any(message["type"] == "tool_call" for message in ws.messages)
-    assert any(message["type"] == "model_done" for message in ws.messages)
+    messages = get_messages(session_id)
+    assert [message["role"] for message in messages] == [
+        "user", "assistant", "tool", "assistant",
+    ]
+    assert messages[1]["model_id"] == "org/model"
+    assert messages[1]["tool_name"] == "get_weather"
+    assert messages[1]["tool_args"] == {"location": "Seattle"}
+    assert messages[2]["model_id"] == "org/model"
+    assert messages[2]["tool_name"] == "get_weather"
+    assert messages[2]["content"] == "Weather in Seattle: Clear, 70°F"
+    assert messages[3]["content"] == "Seattle is clear and 70°F."
+
+    tool_call = next(message for message in ws.messages if message["type"] == "tool_call")
+    assert tool_call == {
+        "type": "tool_call",
+        "session_id": session_id,
+        "model_id": "org/model",
+        "index": 0,
+        "tool": "get_weather",
+        "args": {"location": "Seattle"},
+        "needs_confirmation": False,
+    }
+    tool_result = next(message for message in ws.messages if message["type"] == "tool_result")
+    assert tool_result["result"] == "Weather in Seattle: Clear, 70°F"
+    assert observed_conversations == [
+        [{"role": "user", "content": "What's the weather in Seattle?"}],
+        [
+            {"role": "user", "content": "What's the weather in Seattle?"},
+            {
+                "role": "assistant",
+                "content": '{"tool":"get_weather","args":{"location":"Seattle"}}',
+            },
+            {"role": "tool", "content": "Weather in Seattle: Clear, 70°F"},
+        ],
+    ]
+    done = next(message for message in ws.messages if message["type"] == "model_done")
+    assert done["response"] == "Seattle is clear and 70°F."
+
+
+def test_compare_waits_for_approval_before_mutating_tool(mock_model_manager, monkeypatch):
+    from ui.backend.server import _handle_compare_message
+    from tools import TOOLS
+
+    calls = []
+    responses = iter([
+        ['{"tool":"write_file","args":{"path":"note.txt","content":"hello"}}'],
+        ["Saved."],
+    ])
+
+    def fake_write_file(path, content):
+        calls.append((path, content))
+        return "Wrote note.txt"
+
+    fake_write_file.needs_confirmation = True
+    monkeypatch.setitem(TOOLS, "write_file", fake_write_file)
+    mock_model_manager.generate.side_effect = lambda _conversation: iter(next(responses))
+    ws = _RecordingWebSocket([{"type": "tool_response", "approved": True}])
+
+    asyncio.run(_handle_compare_message(ws, {
+        "type": "message",
+        "content": "Save a note",
+        "models": [{"model_id": "org/model", "revision": PINNED_A}],
+        "project_id": "default",
+    }))
+
+    tool_call = next(message for message in ws.messages if message["type"] == "tool_call")
+    assert tool_call["needs_confirmation"] is True
+    assert calls == [("note.txt", "hello")]
+    assert next(message for message in ws.messages if message["type"] == "tool_result")["result"] == "Wrote note.txt"
 
 
 def test_compare_second_turn_reconstructs_model_specific_history(mock_model_manager):

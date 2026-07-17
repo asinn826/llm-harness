@@ -2,18 +2,20 @@
  * ModelsView — full-page model browse/discover/download experience.
  *
  * Tabs:
- *   - Library: Recommended (starred) + Downloaded cards
+ *   - Library: Recommended + Downloaded models
  *   - Hub:     HuggingFace Hub search (opt-in via one-time disclosure)
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Search, Lock, AlertCircle, Globe, ArrowLeft, X } from "lucide-react";
+import { Search, Lock, Globe, ArrowLeft, Library, X } from "lucide-react";
 import { models as modelsApi, prefs as prefsApi } from "../lib/api";
 import type { ComparisonModelInput, ModelInfo, HubSearchResult, ModelUpdateInfo } from "../lib/types";
 import { ModelCard } from "../components/ModelCard";
 import { ModelDetailsDrawer } from "../components/ModelDetailsDrawer";
+import { StatusNotice } from "../components/StatusNotice";
 import { useDownloads } from "../contexts/DownloadsContext";
 import { getTransferKey } from "../lib/transfers";
+import { getErrorMessage } from "../lib/api";
 
 type Tab = "library" | "hub";
 type SortOpt = "downloads" | "likes" | "lastModified" | "trending";
@@ -51,11 +53,14 @@ export function ModelsView({
   const [recommended, setRecommended] = useState<ModelInfo[]>([]);
   const [cached, setCached] = useState<ModelInfo[]>([]);
   const [libLoading, setLibLoading] = useState(true);
+  const [libError, setLibError] = useState<string | null>(null);
   const [updates, setUpdates] = useState<Record<string, ModelUpdateInfo>>({});
 
   // Hub state
   const [hubEnabled, setHubEnabled] = useState(false);
   const [disclosureOpen, setDisclosureOpen] = useState(false);
+  const [disclosureSaving, setDisclosureSaving] = useState(false);
+  const [disclosureError, setDisclosureError] = useState<string | null>(null);
   const [hubResults, setHubResults] = useState<HubSearchResult[]>([]);
   const [hubLoading, setHubLoading] = useState(false);
   const [hubError, setHubError] = useState<string | null>(null);
@@ -78,13 +83,15 @@ export function ModelsView({
   }, [initialTab]);
 
   // Library refresh
-  const refreshLibrary = useCallback(async () => {
+  const refreshLibrary = useCallback(async (showLoading = false) => {
+    if (showLoading) setLibLoading(true);
+    setLibError(null);
     try {
       const data = await modelsApi.list();
       setRecommended(data.recommended);
       setCached(data.cached);
-    } catch {
-      // silent
+    } catch (error) {
+      setLibError(getErrorMessage(error, "Couldn’t load the model library."));
     } finally {
       setLibLoading(false);
     }
@@ -108,7 +115,7 @@ export function ModelsView({
   useEffect(() => {
     return subscribe((event) => {
       if (event.type === "completed") {
-        refreshLibrary();
+        void refreshLibrary();
         setHubResults((current) => current.map((result) =>
           result.id === event.modelId ? { ...result, is_cached: true } : result
         ));
@@ -131,7 +138,9 @@ export function ModelsView({
         setHubError(data.error ?? null);
       })
       .catch((e) => {
-        if (hubSearchRequestRef.current === requestId) setHubError(String(e));
+        if (hubSearchRequestRef.current === requestId) {
+          setHubError(getErrorMessage(e, "Couldn’t search Hugging Face."));
+        }
       })
       .finally(() => {
         if (hubSearchRequestRef.current === requestId) setHubLoading(false);
@@ -150,18 +159,30 @@ export function ModelsView({
 
   const handleHubTabClick = () => {
     if (hubEnabled) setTab("hub");
-    else setDisclosureOpen(true);
+    else {
+      setDisclosureError(null);
+      setDisclosureOpen(true);
+    }
   };
 
   const handleAcceptDisclosure = async () => {
+    setDisclosureSaving(true);
+    setDisclosureError(null);
     try {
       await prefsApi.setHubSearch(true);
       setHubEnabled(true);
       setDisclosureOpen(false);
       setTab("hub");
-    } catch {
-      setDisclosureOpen(false);
+    } catch (error) {
+      setDisclosureError(getErrorMessage(error, "Couldn’t save this preference."));
+    } finally {
+      setDisclosureSaving(false);
     }
+  };
+
+  const retryHubSearch = () => {
+    const requestId = ++hubSearchRequestRef.current;
+    runHubSearch(requestId);
   };
 
   // ── Library sorted views ────────────────────────────────────────
@@ -185,21 +206,21 @@ export function ModelsView({
   return (
     <div className="models-view" style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, overflow: "hidden" }}>
       {/* Header */}
-      <div className="models-header">
+      <header className="models-header">
         <h1 className="page-title">{selecting ? "Choose models" : "Models"}</h1>
         {selecting && <span className="header-count">{draftModels.length} / {maxModels}</span>}
         <div style={{ flex: 1 }} />
         {selecting && onReturn && (
-          <button onClick={onReturn} style={{
+          <button type="button" onClick={onReturn} style={{
             display: "inline-flex", alignItems: "center", gap: 6,
             padding: "6px 10px", borderRadius: 6,
             border: "1px solid var(--border-default)", background: "var(--bg-secondary)",
-            color: "var(--text-secondary)", fontSize: 12, cursor: "pointer",
+            color: "var(--text-secondary)", fontSize: 14, cursor: "pointer",
           }}>
             <ArrowLeft size={13} /> Return to comparison
           </button>
         )}
-      </div>
+      </header>
 
       {selecting && draftModels.length > 0 && (
         <div style={{
@@ -217,18 +238,16 @@ export function ModelsView({
               ? "Failed"
               : transfer && (transfer.status === "downloading" || transfer.status === "loading")
                 ? `${Math.round(transfer.progress * 100)}%`
-                : "Ready";
+                : null;
             return (
               <span key={model.model_id} title={model.model_id} style={{
                 display: "inline-flex", alignItems: "center", gap: 5,
-                padding: "4px 8px", borderRadius: 999,
-                border: "1px solid var(--border-default)", color: "var(--text-secondary)",
-                background: "var(--bg-tertiary)", fontSize: 11,
+                padding: "4px 2px", color: "var(--text-secondary)", fontSize: 14,
               }}>
                 {model.model_id.split("/").pop()}
-                <span style={{ color: state === "Failed" ? "var(--error)" : "var(--text-muted)", fontSize: 9 }}>{state}</span>
+                {state && <span style={{ color: state === "Failed" ? "var(--error)" : "var(--text-muted)", fontSize: 12 }}>{state}</span>}
                 {onRemoveModel && (
-                  <button onClick={() => onRemoveModel(model.model_id)} aria-label={`Remove ${model.model_id}`} style={{
+                  <button type="button" onClick={() => onRemoveModel(model.model_id)} aria-label={`Remove ${model.model_id}`} style={{
                     display: "flex", border: 0, padding: 0, background: "transparent", color: "var(--text-muted)", cursor: "pointer",
                   }}><X size={11} /></button>
                 )}
@@ -237,30 +256,38 @@ export function ModelsView({
           })}
           <div style={{ flex: 1 }} />
           {draftModels.length >= 2 && onReturn && (
-            <button onClick={onReturn} style={{
-              border: 0, borderRadius: 6, padding: "6px 10px", background: "var(--accent)", color: "white", fontSize: 11, fontWeight: 500, cursor: "pointer",
-            }}>Compare {draftModels.length} models</button>
+            <button type="button" onClick={onReturn} style={{
+              border: 0, borderRadius: 3, padding: "6px 10px", background: "var(--accent)", color: "white", fontSize: 14, fontWeight: 500, cursor: "pointer",
+            }}>Compare</button>
           )}
         </div>
       )}
 
       {/* Tabs */}
-      <div className="models-tabs" style={{ display: "flex", padding: "0 32px", borderBottom: "1px solid var(--border-subtle)", flexShrink: 0, gap: 4 }}>
-        <TabButton active={tab === "library"} onClick={() => setTab("library")} label="Library" />
-        <TabButton active={tab === "hub"} onClick={handleHubTabClick} label="Hub" />
+      <div className="models-tabs" role="tablist" aria-label="Model sources" style={{ display: "flex", padding: "0 32px", borderBottom: "1px solid var(--border-subtle)", flexShrink: 0, gap: 4 }}>
+        <TabButton id="models-library-tab" panelId="models-library-panel" active={tab === "library"} onClick={() => setTab("library")} label="Library" />
+        <TabButton id="models-hub-tab" panelId="models-hub-panel" active={tab === "hub"} onClick={handleHubTabClick} label="Hub" />
       </div>
 
       {/* Content */}
       <div style={{ flex: 1, overflowY: "auto" }}>
-        <div className="models-content" style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 32px" }}>
+        <div
+          id={tab === "library" ? "models-library-panel" : "models-hub-panel"}
+          role="tabpanel"
+          aria-labelledby={tab === "library" ? "models-library-tab" : "models-hub-tab"}
+          className="models-content"
+          style={{ maxWidth: 1100, margin: "0 auto", padding: "24px 32px" }}
+        >
           {tab === "library" && (
             <LibraryPane
               loading={libLoading}
+              error={libError}
               recommended={recommendedSorted}
               cached={cachedSorted}
               updates={updates}
               selectionMode={selecting}
-              onRefresh={refreshLibrary}
+              onRefresh={() => void refreshLibrary(true)}
+              onBrowseHub={handleHubTabClick}
               onOpenDrawer={(m) => openDrawer({
                 modelId: m.id,
                 backend: m.backend,
@@ -276,6 +303,7 @@ export function ModelsView({
               backendFilter={backendFilter} onBackendFilterChange={setBackendFilter}
               loading={hubLoading}
               error={hubError}
+              onRetry={retryHubSearch}
               results={hubResults}
               onOpenDrawer={(r) => openDrawer({
                 modelId: r.id,
@@ -292,7 +320,9 @@ export function ModelsView({
       {disclosureOpen && (
         <HubDisclosure
           onAccept={handleAcceptDisclosure}
-          onCancel={() => { setDisclosureOpen(false); setTab("library"); }}
+          onCancel={() => { setDisclosureOpen(false); setDisclosureError(null); setTab("library"); }}
+          saving={disclosureSaving}
+          error={disclosureError}
         />
       )}
 
@@ -318,41 +348,46 @@ export function ModelsView({
 // ── Library pane ────────────────────────────────────────────────────────
 
 function LibraryPane({
-  loading, recommended, cached, updates, onRefresh, onOpenDrawer,
+  loading, error, recommended, cached, updates, onRefresh, onBrowseHub, onOpenDrawer,
   selectionMode,
 }: {
   loading: boolean;
+  error: string | null;
   recommended: ModelInfo[];
   cached: ModelInfo[];
   updates: Record<string, ModelUpdateInfo>;
   selectionMode: boolean;
   onRefresh: () => void;
+  onBrowseHub: () => void;
   onOpenDrawer: (m: ModelInfo) => void;
 }) {
-  if (loading) return <SkeletonGrid count={4} />;
+  if (loading && recommended.length === 0 && cached.length === 0) return <SkeletonGrid count={4} />;
 
   const empty = recommended.length === 0 && cached.length === 0;
 
   return (
     <>
+      {error && (
+        <StatusNotice
+          tone="offline"
+          title="Model library unavailable"
+          message={error}
+          actionLabel="Retry"
+          onAction={onRefresh}
+        />
+      )}
       {recommended.length > 0 && (
         <Section title="Recommended">
           <Grid>
             {recommended.map((m) => (
-              <div key={m.id} onClick={(e) => {
-                // Only open drawer when clicking on the card background, not action buttons
-                if ((e.target as HTMLElement).closest("button, a")) return;
-                onOpenDrawer(m);
-              }} style={{ cursor: "pointer" }}>
-                <ModelCard
-                  model={m}
-                  starred
-                  hasUpdate={updates[m.id]?.has_update === true}
-                  onDeleted={onRefresh}
-                  onReview={selectionMode ? () => onOpenDrawer(m) : undefined}
-                  reviewLabel="Review & add"
-                />
-              </div>
+              <ModelCard
+                key={m.id}
+                model={m}
+                hasUpdate={updates[m.id]?.has_update === true}
+                onDeleted={onRefresh}
+                onReview={() => onOpenDrawer(m)}
+                reviewLabel={selectionMode ? "Review" : "Details"}
+              />
             ))}
           </Grid>
         </Section>
@@ -361,25 +396,24 @@ function LibraryPane({
         <Section title={`Downloaded (${cached.length})`}>
           <Grid>
             {cached.map((m) => (
-              <div key={m.id} onClick={(e) => {
-                if ((e.target as HTMLElement).closest("button, a")) return;
-                onOpenDrawer(m);
-              }} style={{ cursor: "pointer" }}>
-                <ModelCard
-                  model={m}
-                  hasUpdate={updates[m.id]?.has_update === true}
-                  onDeleted={onRefresh}
-                  onReview={selectionMode ? () => onOpenDrawer(m) : undefined}
-                  reviewLabel="Review & add"
-                />
-              </div>
+              <ModelCard
+                key={m.id}
+                model={m}
+                hasUpdate={updates[m.id]?.has_update === true}
+                onDeleted={onRefresh}
+                onReview={() => onOpenDrawer(m)}
+                reviewLabel={selectionMode ? "Review" : "Details"}
+              />
             ))}
           </Grid>
         </Section>
       )}
-      {empty && (
-        <div style={{ padding: "48px 0", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
-          No models available.
+      {empty && !error && (
+        <div className="models-empty-state">
+          <Library size={20} aria-hidden="true" />
+          <h2>No models in your library yet</h2>
+          <p>Browse Hugging Face to choose a model that fits this machine.</p>
+          <button type="button" className="primary-action" onClick={onBrowseHub}>Browse Hugging Face</button>
         </div>
       )}
     </>
@@ -392,12 +426,13 @@ function HubPane({
   query, onQueryChange,
   sort, onSortChange,
   backendFilter, onBackendFilterChange,
-  loading, error, results, onOpenDrawer,
+  loading, error, results, onRetry, onOpenDrawer,
 }: {
   query: string; onQueryChange: (v: string) => void;
   sort: SortOpt; onSortChange: (v: SortOpt) => void;
   backendFilter: BackendFilter; onBackendFilterChange: (v: BackendFilter) => void;
   loading: boolean; error: string | null;
+  onRetry: () => void;
   results: HubSearchResult[];
   onOpenDrawer: (r: HubSearchResult) => void;
 }) {
@@ -411,6 +446,7 @@ function HubPane({
             value={query}
             onChange={(e) => onQueryChange(e.target.value)}
             placeholder="Search HuggingFace..."
+            aria-label="Search Hugging Face models"
             style={{
               width: "100%",
               padding: "7px 10px 7px 30px",
@@ -418,7 +454,7 @@ function HubPane({
               border: "1px solid var(--border-default)",
               borderRadius: 6,
               color: "var(--text-primary)",
-              fontSize: 13,
+              fontSize: 14,
               outline: "none",
               fontFamily: "inherit",
             }}
@@ -428,6 +464,7 @@ function HubPane({
         <select
           value={sort}
           onChange={(e) => onSortChange(e.target.value as SortOpt)}
+          aria-label="Sort Hub results"
           style={{
             padding: "6px 10px",
             background: "var(--bg-secondary)",
@@ -449,26 +486,17 @@ function HubPane({
       {/* Results */}
       {loading && <SkeletonGrid count={6} />}
       {error && !loading && (
-        <ErrorBanner message={error} />
+        <StatusNotice tone="error" title="Hugging Face search failed" message={error} actionLabel="Retry" onAction={onRetry} />
       )}
       {!loading && !error && results.length === 0 && (
-        <div style={{ padding: "48px 0", textAlign: "center", color: "var(--text-muted)", fontSize: 13 }}>
+        <div style={{ padding: "48px 0", textAlign: "center", color: "var(--text-muted)", fontSize: 14 }}>
           No results{query ? ` for "${query}"` : ""}.
         </div>
       )}
       {!loading && !error && results.length > 0 && (
         <Grid>
           {results.map((r) => (
-            <div
-              key={r.id}
-              onClick={(e) => {
-                if ((e.target as HTMLElement).closest("button, a")) return;
-                onOpenDrawer(r);
-              }}
-              style={{ cursor: "pointer" }}
-            >
-              <HubResultCard result={r} onReview={() => onOpenDrawer(r)} />
-            </div>
+            <HubResultCard key={r.id} result={r} onReview={() => onOpenDrawer(r)} />
           ))}
         </Grid>
       )}
@@ -492,13 +520,13 @@ function HubResultCard({ result, onReview }: { result: HubSearchResult; onReview
 
   return (
     <div style={{ position: "relative" }}>
-      <ModelCard model={asModel} variant="compact" onReview={onReview} reviewLabel="Check" />
+      <ModelCard model={asModel} variant="compact" onReview={onReview} reviewLabel="Details" />
       {/* Hub-specific stats overlay (below card content area) */}
       <div style={{
         position: "absolute",
         top: "50%", right: 88, transform: "translateY(-50%)",
         display: "flex", alignItems: "center", gap: 10,
-        fontSize: 10, color: "var(--text-muted)",
+        fontSize: 12, color: "var(--text-muted)",
         pointerEvents: "none",
       }}>
         {result.gated && (
@@ -512,26 +540,30 @@ function HubResultCard({ result, onReview }: { result: HubSearchResult; onReview
 }
 
 function BackendToggle({ value, onChange }: { value: BackendFilter; onChange: (v: BackendFilter) => void }) {
-  const opts: BackendFilter[] = ["all", "mlx", "hf"];
+  const opts: { value: BackendFilter; label: string }[] = [
+    { value: "all", label: "All" },
+    { value: "mlx", label: "MLX" },
+    { value: "hf", label: "HF" },
+  ];
   return (
-    <div style={{ display: "flex", background: "var(--bg-secondary)", border: "1px solid var(--border-default)", borderRadius: 6, overflow: "hidden" }}>
-      {opts.map((o) => (
+    <div role="group" aria-label="Model backend" style={{ display: "flex", background: "var(--bg-secondary)", border: "1px solid var(--border-default)", borderRadius: 6, overflow: "hidden" }}>
+      {opts.map((option) => (
         <button
-          key={o}
-          onClick={() => onChange(o)}
+          type="button"
+          key={option.value}
+          onClick={() => onChange(option.value)}
+          aria-pressed={value === option.value}
           style={{
             padding: "6px 10px",
-            background: value === o ? "var(--bg-elevated)" : "transparent",
+            background: value === option.value ? "var(--bg-elevated)" : "transparent",
             border: "none",
-            color: value === o ? "var(--text-primary)" : "var(--text-tertiary)",
-            fontSize: 11,
-            fontWeight: value === o ? 500 : 400,
+            color: value === option.value ? "var(--text-primary)" : "var(--text-tertiary)",
+            fontSize: 12,
+            fontWeight: value === option.value ? 500 : 400,
             cursor: "pointer",
-            textTransform: "uppercase",
-            letterSpacing: "0.02em",
           }}
         >
-          {o}
+          {option.label}
         </button>
       ))}
     </div>
@@ -540,7 +572,17 @@ function BackendToggle({ value, onChange }: { value: BackendFilter; onChange: (v
 
 // ── Disclosure ─────────────────────────────────────────────────────────
 
-function HubDisclosure({ onAccept, onCancel }: { onAccept: () => void; onCancel: () => void }) {
+function HubDisclosure({
+  onAccept,
+  onCancel,
+  saving,
+  error,
+}: {
+  onAccept: () => void;
+  onCancel: () => void;
+  saving: boolean;
+  error: string | null;
+}) {
   const dialogRef = useRef<HTMLDivElement>(null);
   const cancelRef = useRef(onCancel);
 
@@ -595,6 +637,7 @@ function HubDisclosure({ onAccept, onCancel }: { onAccept: () => void; onCancel:
         role="dialog"
         aria-modal="true"
         aria-labelledby="hub-disclosure-title"
+        aria-describedby="hub-disclosure-description"
         tabIndex={-1}
         style={{
         position: "fixed",
@@ -611,25 +654,25 @@ function HubDisclosure({ onAccept, onCancel }: { onAccept: () => void; onCancel:
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12 }}>
           <Globe size={16} style={{ color: "var(--accent)" }} />
           <h3 id="hub-disclosure-title" style={{ margin: 0, fontSize: 14, fontWeight: 600, color: "var(--text-primary)" }}>
-            Enable HuggingFace search?
+            Search Hugging Face?
           </h3>
         </div>
-        <p style={{ margin: "0 0 16px", fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
-          Searching the Hub sends your queries to <code style={{ background: "var(--bg-elevated)", padding: "1px 5px", borderRadius: 3, fontSize: 11 }}>huggingface.co</code>.
-          No personal data is included — just your search terms. Results are cached briefly to reduce load.
+        <p id="hub-disclosure-description" style={{ margin: "0 0 12px", fontSize: 14, color: "var(--text-secondary)", lineHeight: 1.5 }}>
+          Search terms are sent to huggingface.co. Gated models need an HF token in Settings.
         </p>
-        <p style={{ margin: "0 0 20px", fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.6 }}>
-          For gated models you'll need an HF token (set in Settings).
+        <p style={{ margin: "0 0 20px", fontSize: 12, color: "var(--text-tertiary)", lineHeight: 1.5 }}>
+          Harness remembers this choice on this Mac. You can turn Hub search off later in Settings.
         </p>
+        {error && <div className="dialog-error" role="alert">{error}</div>}
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-          <button onClick={onCancel} style={{
+          <button type="button" onClick={onCancel} disabled={saving} style={{
             padding: "6px 14px", background: "transparent", border: "1px solid var(--border-default)",
             borderRadius: 6, color: "var(--text-secondary)", fontSize: 12, cursor: "pointer",
           }}>Cancel</button>
-          <button onClick={onAccept} style={{
+          <button type="button" onClick={onAccept} disabled={saving} style={{
             padding: "6px 14px", background: "var(--accent)", border: "none",
             borderRadius: 6, color: "white", fontSize: 12, fontWeight: 500, cursor: "pointer",
-          }}>Enable</button>
+          }}>{saving ? "Saving…" : "Allow Hub search"}</button>
         </div>
       </div>
     </>
@@ -638,9 +681,14 @@ function HubDisclosure({ onAccept, onCancel }: { onAccept: () => void; onCancel:
 
 // ── Small helpers ──────────────────────────────────────────────────────
 
-function TabButton({ active, onClick, label }: { active: boolean; onClick: () => void; label: string }) {
+function TabButton({ id, panelId, active, onClick, label }: { id: string; panelId: string; active: boolean; onClick: () => void; label: string }) {
   return (
     <button
+      type="button"
+      id={id}
+      role="tab"
+      aria-controls={panelId}
+      aria-selected={active}
       onClick={onClick}
       style={{
         padding: "10px 2px",
@@ -649,7 +697,7 @@ function TabButton({ active, onClick, label }: { active: boolean; onClick: () =>
         border: "none",
         borderBottom: `2px solid ${active ? "var(--accent)" : "transparent"}`,
         color: active ? "var(--text-primary)" : "var(--text-tertiary)",
-        fontSize: 13,
+        fontSize: 14,
         fontWeight: active ? 500 : 400,
         cursor: "pointer",
         transition: "color 120ms ease-out, border-color 120ms ease-out",
@@ -698,24 +746,6 @@ function SkeletonGrid({ count }: { count: number }) {
           }}
         />
       ))}
-    </div>
-  );
-}
-
-function ErrorBanner({ message }: { message: string }) {
-  return (
-    <div style={{
-      display: "flex", alignItems: "flex-start", gap: 10,
-      padding: "12px 16px",
-      background: "var(--error-muted)",
-      border: "1px solid rgba(229,83,75,0.3)",
-      borderRadius: 8,
-      marginBottom: 20,
-    }}>
-      <AlertCircle size={14} style={{ color: "var(--error)", flexShrink: 0, marginTop: 2 }} />
-      <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>
-        {message}
-      </div>
     </div>
   );
 }

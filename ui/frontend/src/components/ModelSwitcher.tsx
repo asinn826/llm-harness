@@ -11,7 +11,7 @@ interface ModelSwitcherProps {
 }
 
 export function ModelSwitcher({ onBrowseAll, collapsed = false }: ModelSwitcherProps) {
-  const { downloads, currentModelId, currentBackend, startDownload } = useDownloads();
+  const { downloads, currentModelId, startDownload } = useDownloads();
 
   const [isOpen, setIsOpen] = useState(false);
   const [cached, setCached] = useState<ModelInfo[]>([]);
@@ -103,14 +103,10 @@ export function ModelSwitcher({ onBrowseAll, collapsed = false }: ModelSwitcherP
     >
       {cached.length === 0 ? (
         <div className="px-3 py-6 text-center">
-          <div className="text-xs text-[var(--text-secondary)] mb-1">No models yet</div>
-          <div className="text-[10px] text-[var(--text-muted)]">Browse to download one</div>
+          <div className="text-sm text-[var(--text-secondary)]">No models</div>
         </div>
       ) : (
         <>
-          <div className="px-2.5 py-1.5 text-[10px] text-[var(--text-muted)] uppercase tracking-wider">
-            Available
-          </div>
           {cached.map((model) => (
             <button
               key={model.id}
@@ -122,17 +118,10 @@ export function ModelSwitcher({ onBrowseAll, collapsed = false }: ModelSwitcherP
                 style={{ background: getModelColor(model.id) }}
               />
               <div className="flex-1 text-left min-w-0">
-                <div className="text-xs text-[var(--text-primary)] flex items-center gap-1.5 truncate">
-                  <span className="truncate">{model.name}</span>
-                  <span className="text-[10px] px-1 py-px rounded bg-[var(--bg-elevated)] text-[var(--text-tertiary)] shrink-0">
-                    {model.backend === "mlx" ? "MLX" : "HF"}
-                  </span>
+                <div className="text-sm text-[var(--text-primary)] truncate">{model.name}</div>
+                <div className="text-xs text-[var(--text-muted)] truncate">
+                  {[model.backend === "mlx" ? "MLX" : "HF", model.quality, model.size_label || model.size].filter(Boolean).join(" · ")}
                 </div>
-                {(model.quality || model.size_label || model.size) && (
-                  <div className="text-[10px] text-[var(--text-muted)] truncate">
-                    {[model.quality, model.size_label || model.size].filter(Boolean).join(" · ")}
-                  </div>
-                )}
               </div>
               {model.is_loaded && <Check size={14} className="text-[var(--success)] shrink-0" />}
             </button>
@@ -146,7 +135,7 @@ export function ModelSwitcher({ onBrowseAll, collapsed = false }: ModelSwitcherP
           onClick={handleBrowseAll}
           className="w-full flex items-center gap-2 px-2.5 py-2.5 border-t border-[var(--border-subtle)] hover:bg-[var(--bg-surface)] transition-colors duration-[var(--duration-fast)]"
         >
-          <span className="flex-1 text-left text-[11px] text-[var(--text-secondary)] font-medium">
+          <span className="flex-1 text-left text-sm text-[var(--text-secondary)] font-medium">
             Browse all models
           </span>
           <ArrowRight size={12} className="text-[var(--text-muted)]" />
@@ -207,10 +196,10 @@ export function ModelSwitcher({ onBrowseAll, collapsed = false }: ModelSwitcherP
         <div className="flex-1 text-left min-w-0">
           {loadingId ? (
             <>
-              <div className="text-xs text-[var(--text-primary)] font-medium truncate">
+              <div className="text-sm text-[var(--text-primary)] font-medium truncate">
                 {loadingId.split("/").pop()}
               </div>
-              <div className="text-[10px] text-[var(--text-tertiary)]">
+              <div className="text-xs text-[var(--text-tertiary)]">
                 {loadMessage || "Loading..."}
               </div>
               <div className="shimmer-bar mt-1.5 w-full" style={{ opacity: loadProgress > 0 ? 0 : 1, transition: "opacity 300ms" }} />
@@ -223,18 +212,11 @@ export function ModelSwitcher({ onBrowseAll, collapsed = false }: ModelSwitcherP
             </>
           ) : (
             <>
-              <div className="text-xs text-[var(--text-primary)] font-medium truncate">
+              <div className="text-sm text-[var(--text-primary)] font-medium truncate">
                 {currentModelId ? currentModelId.split("/").pop() : "No model"}
               </div>
-              {currentModelId && !loadError && (
-                <div className="text-[10px] text-[var(--text-tertiary)] flex items-center gap-1">
-                  <span>{currentBackend === "mlx" ? "MLX" : "HF"}</span>
-                  <span>·</span>
-                  <span className="text-[var(--success)]">Ready</span>
-                </div>
-              )}
               {loadError && (
-                <div className="text-[10px] text-[var(--error)] truncate">{loadError}</div>
+                <div className="text-xs text-[var(--error)] truncate">{loadError}</div>
               )}
             </>
           )}
