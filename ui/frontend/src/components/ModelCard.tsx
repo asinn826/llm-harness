@@ -19,12 +19,6 @@ import {
   Check,
   X as XIcon,
   ExternalLink,
-  Flame,
-  Snowflake,
-  Thermometer,
-  ShieldCheck,
-  HelpCircle,
-  Star,
   MoreHorizontal,
   Trash2,
   Copy,
@@ -32,7 +26,6 @@ import {
 import type { ModelInfo } from "../lib/types";
 import { getModelColor } from "../lib/types";
 import { useDownloads } from "../contexts/DownloadsContext";
-import { HardwareFitChip } from "./HardwareFitChip";
 import { UpdateBadge } from "./UpdateBadge";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { models as modelsApi } from "../lib/api";
@@ -41,8 +34,6 @@ import { getTransferKey } from "../lib/transfers";
 interface ModelCardProps {
   model: ModelInfo;
   variant?: "rich" | "compact";
-  /** If true, a small "Recommended" star badge renders in the header row. */
-  starred?: boolean;
   /** Whether this model has a newer Hub commit — shows UpdateBadge. */
   hasUpdate?: boolean;
   /** Called after a successful cache deletion (parent refetches list). */
@@ -55,11 +46,10 @@ interface ModelCardProps {
 export function ModelCard({
   model,
   variant = "rich",
-  starred = false,
   hasUpdate = false,
   onDeleted,
   onReview,
-  reviewLabel = "Check compatibility",
+  reviewLabel = "Details",
 }: ModelCardProps) {
   const { downloads, currentModelId, startDownload, cancelDownload } = useDownloads();
   const [menuOpen, setMenuOpen] = useState(false);
@@ -111,19 +101,30 @@ export function ModelCard({
     <div
       className="model-card"
       style={{
+        position: "relative",
         border: "1px solid var(--border-default)",
         borderRadius: 3,
         padding: 14,
         background: "var(--bg-secondary)",
-        display: "flex",
-        flexDirection: "column",
-        gap: 8,
-        minHeight: model.description && !onReview ? 126 : 92,
-        transition: "background 120ms ease-out, border-color 120ms ease-out, transform 120ms ease-out",
+        display: "grid",
+        gridTemplateColumns: "minmax(0, 1fr) auto",
+        gridTemplateRows: "auto auto",
+        columnGap: 18,
+        rowGap: 2,
+        minHeight: 72,
       }}
     >
-      {/* Row 1: dot, name, badges */}
-      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+      {onReview && (
+        <button
+          type="button"
+          className="model-card-open-target"
+          onClick={onReview}
+          aria-label={`Open details for ${model.id}`}
+        />
+      )}
+
+      {/* Name and exceptional state */}
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, gridColumn: 1, gridRow: 1 }}>
         <div
           style={{
             width: 10, height: 10, borderRadius: "50%",
@@ -138,18 +139,11 @@ export function ModelCard({
         >
           {model.name}
         </span>
-        {starred && (
-          <span title="Recommended" style={{ color: "var(--warning)", display: "flex" }}>
-            <Star size={12} fill="currentColor" />
-          </span>
-        )}
-        <BackendBadge backend={model.backend} />
-        <HeatIcon heat={model.heat} />
-        <ToolUseBadge tier={model.tool_use_tier} />
-        <HardwareFitChip model={model} />
         <div style={{ flex: 1 }} />
         {hasUpdate && !isActive && (
-          <UpdateBadge kind="commit" title="A newer version of this model is available on HuggingFace" onClick={() => startDownload(model.id, model.backend)} />
+          <span className="model-card-action">
+            <UpdateBadge kind="commit" title="A newer version of this model is available on HuggingFace" onClick={() => startDownload(model.id, model.backend)} />
+          </span>
         )}
         {hasSuperseded && !isActive && (
           <UpdateBadge
@@ -161,8 +155,7 @@ export function ModelCard({
           <span
             style={{
               display: "inline-flex", alignItems: "center", gap: 4,
-              fontSize: 10, padding: "2px 7px", borderRadius: 10,
-              background: "var(--success-muted)", color: "var(--success)",
+              fontSize: 12, color: "var(--success)",
               fontWeight: 500,
             }}
           >
@@ -170,7 +163,7 @@ export function ModelCard({
           </span>
         )}
         {model.is_cached && (
-          <div style={{ position: "relative" }}>
+          <div className="model-card-action" style={{ position: "relative" }}>
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -215,8 +208,9 @@ export function ModelCard({
         )}
       </div>
 
-      {/* Row 2: metadata chips */}
-      <div style={{ fontSize: 11, color: "var(--text-tertiary)", display: "flex", gap: 6, flexWrap: "wrap" }}>
+      {/* Metadata */}
+      <div style={{ fontSize: 12, color: "var(--text-tertiary)", display: "flex", gap: 6, flexWrap: "wrap", gridColumn: 1, gridRow: 2, paddingLeft: 18 }}>
+        <span>{model.backend.toUpperCase()}</span>
         {model.author && <span>{model.author}</span>}
         {model.parameters && <Sep text={model.parameters} />}
         {model.quantization && <Sep text={model.quantization} />}
@@ -224,45 +218,27 @@ export function ModelCard({
         {model.context_window && <Sep text={`${(model.context_window / 1024).toFixed(0)}k ctx`} />}
       </div>
 
-      {/* Row 3: description */}
-      {model.description && !onReview && (
-        <p
-          style={{
-            fontSize: 12, color: "var(--text-secondary)", lineHeight: 1.5,
-            margin: 0,
-            display: "-webkit-box",
-            WebkitLineClamp: 1,
-            WebkitBoxOrient: "vertical",
-            overflow: "hidden",
-          }}
-        >
-          {model.description}
-        </p>
-      )}
-
-      {/* Spacer */}
-      <div style={{ flex: 1 }} />
-
-      {/* Row 5: actions */}
-      {onReview ? (
-        <button onClick={onReview} aria-label={`${reviewLabel} for ${model.id}`} style={{
-          alignSelf: "flex-start", padding: "6px 10px", borderRadius: 6,
-          border: "1px solid var(--border-default)", background: "var(--bg-tertiary)",
-          color: "var(--text-secondary)", fontSize: 11, fontWeight: 500, cursor: "pointer",
-        }}>
-          {reviewLabel}
-        </button>
-      ) : (
-        <ActionRow
-          model={model}
-          isActive={isActive}
-          isBusy={isBusy}
-          isError={isError}
-          dl={dl}
-          onStart={() => startDownload(model.id, model.backend)}
-          onCancel={() => cancelDownload(model.id, model.backend, null)}
-        />
-      )}
+      <div className="model-card-action" style={{ gridColumn: 2, gridRow: "1 / span 2", alignSelf: "center", minWidth: 96 }}>
+        {onReview ? (
+          <button onClick={onReview} aria-label={`${reviewLabel} for ${model.id}`} style={{
+            padding: "6px 10px", borderRadius: 3,
+            border: "1px solid var(--border-default)", background: "transparent",
+            color: "var(--text-secondary)", fontSize: 14, fontWeight: 500, cursor: "pointer",
+          }}>
+            {reviewLabel}
+          </button>
+        ) : (
+          <ActionRow
+            model={model}
+            isActive={isActive}
+            isBusy={isBusy}
+            isError={isError}
+            dl={dl}
+            onStart={() => startDownload(model.id, model.backend)}
+            onCancel={() => cancelDownload(model.id, model.backend, null)}
+          />
+        )}
+      </div>
 
       {/* Delete confirmation */}
       {deleteDialog && (
@@ -272,11 +248,11 @@ export function ModelCard({
             <>
               <strong>{model.name}</strong>
               {model.size_label ? ` (${model.size_label})` : ""} will be deleted from{" "}
-              <code style={{ fontFamily: "var(--font-mono)", fontSize: 11, padding: "1px 4px", background: "var(--bg-elevated)", borderRadius: 3 }}>
+              <code style={{ fontFamily: "var(--font-mono)", fontSize: 12, padding: "1px 4px", background: "var(--bg-elevated)", borderRadius: 3 }}>
                 ~/.cache/huggingface/hub
               </code>. You can re-download it later.
               {deleteError && (
-                <div style={{ marginTop: 10, color: "var(--error)", fontSize: 11 }}>{deleteError}</div>
+                <div style={{ marginTop: 10, color: "var(--error)", fontSize: 12 }}>{deleteError}</div>
               )}
             </>
           }
@@ -329,7 +305,7 @@ function MenuItem({ icon, label, onClick, destructive = false }: { icon: React.R
         border: "none",
         textAlign: "left",
         color: destructive ? "var(--error)" : "var(--text-secondary)",
-        fontSize: 12,
+        fontSize: 14,
         cursor: "pointer",
       }}
       onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg-surface)")}
@@ -360,6 +336,7 @@ function renderCompact(args: {
     <div
       className="model-row"
       style={{
+        position: "relative",
         display: "flex",
         alignItems: "center",
         gap: 10,
@@ -370,19 +347,28 @@ function renderCompact(args: {
         background: "transparent",
       }}
     >
+      {onReview && (
+        <button
+          type="button"
+          className="model-card-open-target"
+          onClick={onReview}
+          aria-label={`Open details for ${model.id}`}
+        />
+      )}
       <div style={{ width: 8, height: 8, borderRadius: "50%", background: color, flexShrink: 0 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 13, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <div style={{ fontSize: 14, color: "var(--text-primary)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {model.name}
         </div>
-        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-          {[model.author, model.parameters, model.size_label || model.size].filter(Boolean).join(" · ")}
+        <div style={{ fontSize: 12, color: "var(--text-muted)" }}>
+          {[model.backend.toUpperCase(), model.author, model.parameters, model.size_label || model.size].filter(Boolean).join(" · ")}
         </div>
       </div>
       {onReview ? (
         <button
           onClick={onReview}
           aria-label={`${reviewLabel} for ${model.id}`}
+          className="model-card-action"
           style={secondaryBtnStyle}
         >
           {reviewLabel}
@@ -420,7 +406,7 @@ function ActionRow({
     return (
       <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 11, color: "var(--text-secondary)", marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          <div style={{ fontSize: 12, color: "var(--text-secondary)", marginBottom: 4, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
             {dl.message || (dl.status === "loading" ? "Loading..." : "Downloading...")}
           </div>
           <div style={{ height: 3, borderRadius: 2, background: "var(--bg-primary)", overflow: "hidden" }}>
@@ -445,7 +431,7 @@ function ActionRow({
   if (isError) {
     return (
       <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
-        <span style={{ flex: 1, fontSize: 11, color: "var(--error)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+        <span style={{ flex: 1, fontSize: 12, color: "var(--error)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {dl?.error || "Failed"}
         </span>
         <button onClick={onStart} style={{ ...secondaryBtnStyle, color: "var(--error)", borderColor: "rgba(229,83,75,0.3)" }}>
@@ -513,54 +499,6 @@ function ActionRow({
   );
 }
 
-// ── Badges ────────────────────────────────────────────────────────────
-
-function BackendBadge({ backend }: { backend: "mlx" | "hf" }) {
-  return (
-    <span
-      style={{
-        fontSize: 10, padding: "1px 6px", borderRadius: 3,
-        background: "var(--bg-elevated)", color: "var(--text-tertiary)",
-        fontWeight: 500,
-        letterSpacing: "0.02em",
-      }}
-    >
-      {backend === "mlx" ? "MLX" : "HF"}
-    </span>
-  );
-}
-
-function HeatIcon({ heat }: { heat?: string }) {
-  if (heat === "Cool") return <Snowflake size={11} style={{ color: "#66d6e5" }} />;
-  if (heat === "Warm") return <Thermometer size={11} style={{ color: "#e5a820" }} />;
-  if (heat === "Hot") return <Flame size={11} style={{ color: "#e5534b" }} />;
-  return null;
-}
-
-function ToolUseBadge({ tier }: { tier?: "verified" | "likely" | "unknown" }) {
-  if (!tier || tier === "unknown") return null;
-  const isVerified = tier === "verified";
-  const color = isVerified ? "var(--success)" : "var(--warning)";
-  const label = isVerified ? "Tools ✓" : "Tools?";
-  const title = isVerified
-    ? "Verified tool-use support — curated by the harness team"
-    : "Likely tool-use support — chat template references tools/functions";
-  return (
-    <span
-      title={title}
-      style={{
-        display: "inline-flex", alignItems: "center", gap: 3,
-        fontSize: 10, padding: "1px 6px", borderRadius: 3,
-        background: "var(--bg-elevated)", color,
-        fontWeight: 500,
-      }}
-    >
-      {isVerified ? <ShieldCheck size={10} /> : <HelpCircle size={10} />}
-      {label}
-    </span>
-  );
-}
-
 function Sep({ text }: { text: string }) {
   return (
     <>
@@ -576,11 +514,11 @@ const primaryBtnStyle: React.CSSProperties = {
   display: "inline-flex",
   alignItems: "center",
   padding: "6px 14px",
-  background: "var(--accent)",
-  color: "white",
-  border: "none",
-  borderRadius: 6,
-  fontSize: 12,
+  background: "transparent",
+  color: "var(--text-primary)",
+  border: "1px solid var(--border-default)",
+  borderRadius: 3,
+  fontSize: 14,
   fontWeight: 500,
   cursor: "pointer",
   transition: "background 60ms ease-out",
@@ -594,7 +532,7 @@ const secondaryBtnStyle: React.CSSProperties = {
   color: "var(--text-secondary)",
   border: "1px solid var(--border-default)",
   borderRadius: 6,
-  fontSize: 12,
+  fontSize: 14,
   cursor: "pointer",
 };
 

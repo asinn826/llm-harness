@@ -1,15 +1,28 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useId } from "react";
 import { ArrowUp } from "lucide-react";
 
 interface ChatInputProps {
   onSend: (message: string) => void;
   disabled?: boolean;
   placeholder?: string;
+  description?: string;
+  actionLabel?: string;
+  onAction?: () => void;
+  ariaLabel?: string;
 }
 
-export function ChatInput({ onSend, disabled, placeholder = "Message..." }: ChatInputProps) {
+export function ChatInput({
+  onSend,
+  disabled,
+  placeholder = "Message...",
+  description,
+  actionLabel,
+  onAction,
+  ariaLabel = "Prompt",
+}: ChatInputProps) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const descriptionId = useId();
 
   const handleSend = () => {
     const trimmed = value.trim();
@@ -38,14 +51,25 @@ export function ChatInput({ onSend, disabled, placeholder = "Message..." }: Chat
 
   return (
     <div className="composer-shell">
+      {description && (
+        <div className="composer-guidance" id={descriptionId} role="status">
+          <span>{description}</span>
+          {actionLabel && onAction && (
+            <button type="button" onClick={onAction}>{actionLabel}</button>
+          )}
+        </div>
+      )}
       <div className="composer">
+        <label className="sr-only" htmlFor={`${descriptionId}-input`}>{ariaLabel}</label>
         <textarea
+          id={`${descriptionId}-input`}
           ref={textareaRef}
           value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={placeholder}
           disabled={disabled}
+          aria-describedby={description ? descriptionId : undefined}
           rows={1}
           style={{
             flex: 1,
@@ -62,8 +86,11 @@ export function ChatInput({ onSend, disabled, placeholder = "Message..." }: Chat
           }}
         />
         <button
+          type="button"
           onClick={handleSend}
           disabled={!value.trim() || disabled}
+          aria-label="Run comparison"
+          title="Run comparison"
           className={value.trim() && !disabled ? "send-btn-active" : ""}
           style={{
             width: 28,

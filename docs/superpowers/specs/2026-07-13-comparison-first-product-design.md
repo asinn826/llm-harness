@@ -1,10 +1,13 @@
 # Comparison-First LLM Harness Product Design
 
 **Date:** 2026-07-13
+**Revised:** 2026-07-17
 
 ## Product decision
 
 LLM Harness becomes a local workbench for running compatible, freely downloadable Hugging Face chat models side by side. Comparison is the default workflow and the durable unit of history; general-purpose agent chat is retained only as legacy functionality during migration.
+
+Every model in a comparison receives the same tools and the same iterative harness contract. The comparison surface shows each model's observable tool calls, arguments, results, and final answer in its own pane so tool choice and execution behavior can be evaluated alongside answer quality.
 
 The initial product remains Apple-Silicon-first and uses the existing MLX and Hugging Face Transformers runtimes. It supports compatible text-generation repositories rather than claiming universal Hugging Face compatibility.
 
@@ -17,7 +20,7 @@ The initial product remains Apple-Silicon-first and uses the existing MLX and Hu
 - MLX and Transformers loaders, Hugging Face cache integration, token settings, and progress WebSockets are reusable infrastructure once model identity includes backend plus immutable revision.
 - SQLite sessions/messages are a useful compatibility layer for durable comparison threads; they can be extended rather than replaced.
 - Streaming response rendering, model cards, hardware inspection, and the installed-model cache are reusable UI components after being made comparison-aware.
-- The legacy CLI and tool loop are useful implementation references and compatibility surfaces, but they should no longer determine the desktop information architecture.
+- The shared tool registry and bounded execution loop are reusable comparison infrastructure, independent of the legacy chat information architecture.
 
 ### Baseline product problems the pivot must remove
 
@@ -30,7 +33,7 @@ The initial product remains Apple-Silicon-first and uses the existing MLX and Hu
 
 ### Explicitly out of scope for the focused product
 
-- Tool-enabled agent workflows, iMessage/calendar actions, broad macOS permission management, and autonomous multi-step execution.
+- Unbounded background autonomy, silent mutating actions, and raw hidden chain-of-thought display. Mutating tools remain approval-gated.
 - A first-class single-model chat product; legacy chats remain readable but do not receive new product investment.
 - Universal execution of every Hub repository, including training checkpoints, arbitrary remote code, unsupported multimodal architectures, and GGUF-only repositories.
 - Cloud inference providers, hosted model APIs, fine-tuning, training, and benchmark orchestration.
@@ -45,7 +48,7 @@ Harness
 │   └── Project
 │       ├── Comparison threads
 │       │   └── Turns
-│       │       └── One response per model
+│       │       └── One execution trace and response per model
 │       ├── Saved lineups
 │       └── Project defaults
 ├── Model Library
@@ -70,8 +73,8 @@ Harness
 4. Preflight each model for access, format, runtime compatibility, download size, and memory fit.
 5. Install missing models and add them to the lineup.
 6. Send one prompt to every model.
-7. Run models sequentially on the local accelerator and stream results into aligned columns.
-8. Persist the prompt, lineup, settings, model outcomes, metrics, and errors before declaring the run complete.
+7. Run every model sequentially with the same bounded tool loop and stream its calls, results, and final answer into an aligned column.
+8. Persist the prompt, lineup, settings, model-attributed tool trace, final outcomes, metrics, and errors before declaring the run complete.
 9. Reopen the comparison in the same side-by-side layout, continue it, retry one response, or fork it.
 
 ## Opinionated future-state experience
@@ -83,7 +86,7 @@ Harness
 - **Lineups are ordered experimental inputs.** The first completed turn locks model order and revisions. Changing the lineup creates a fork so prior results stay reproducible.
 - **Comparison threads are the main history object.** Sidebar history is project-scoped and shows the prompt-derived title, model lineup, status, and recency. Reopening restores aligned turns and per-model histories.
 - **Saved lineups reduce repeated setup.** A user can name a verified two- or three-model lineup, reuse it in a project, and see when a newer Hub revision is available without silently adopting it.
-- **Fairness is visible.** Shared generation settings, runtime deviations, load time, generation time, token count, and failures are attached to each run. Models execute sequentially under the same prompt and supported parameters.
+- **Fairness is visible.** Shared generation settings, tool availability, approval rules, runtime deviations, timing, token count, and failures are attached to each run. Models execute sequentially under the same prompt and harness.
 - **Partial outcomes remain useful.** A failed or cancelled model column is persisted beside successful responses, with a targeted retry action that does not erase the original attempt.
 - **Evaluation is lightweight and human-centered.** Users can mark a preferred response, add notes/tags, and export a comparison; heavyweight benchmark suites remain outside the core workflow.
 
@@ -93,7 +96,9 @@ Harness
 - Model load time and generation time are measured separately.
 - Generation parameters are shared and locked where runtimes support equivalent behavior.
 - Runtime deviations are recorded rather than silently approximated.
-- Tools are disabled in the normal comparison path; tool-use evaluation can return later as an explicit capability test.
+- Every model receives the same tool registry and tool-call format.
+- Read-only tools execute automatically; mutating tools require explicit approval for each model.
+- Observable calls, arguments, and results are shown and persisted per model. Raw hidden chain-of-thought text is not exposed.
 - Partial success is first-class: one model failing does not discard other results.
 
 ## First implementation slice
@@ -107,7 +112,7 @@ The first slice establishes the product skeleton without replacing every existin
 - Persist model-load and generation failures as model-attributed messages.
 - Restore saved comparison sessions into the side-by-side view.
 - Preserve multi-turn, per-model conversation context.
-- Use a shared tool-free comparison prompt so every run is a bounded model response rather than an agent workflow.
+- Use the shared bounded tool loop so every model is evaluated against the same prompt, tools, and execution rules.
 - Make Compare the default new-session destination while keeping legacy chat sessions readable.
 
 This slice deliberately did not implement Hub preflight, exact revision pinning, saved reusable lineups, verdicts, or the full project-management UI. Those build on the durable comparison thread introduced here.
@@ -132,9 +137,10 @@ Saved lineups, shared generation controls, run-level load timing, retry-one-mode
 
 1. **Foundation — delivered:** projects, comparison-first routing, fixed ordered lineups, durable per-model outcomes, multi-turn restore, and legacy-chat compatibility.
 2. **Hub-to-lineup — delivered:** revision-resolving preflight, install-only downloads, direct selection mode, cache truth, runtime propagation, and actionable incompatibility states.
-3. **Reusable experiments — next:** saved lineups, shared generation controls, explicit load-versus-generation timing, per-model retry, and comparison forking when inputs change.
-4. **Evaluation layer:** preference/verdict capture, annotations, tags, search/filtering, and Markdown/JSON export with full run metadata.
-5. **Model lifecycle:** pinned/recent library views, update availability without auto-upgrade, cache storage controls, disk planning, and clearer runtime installation guidance.
+3. **Tool-enabled comparisons — delivered:** shared registry and iterative loop, automatic read-only execution, approval-gated mutations, and durable per-model traces.
+4. **Reusable experiments — next:** saved lineups, shared generation controls, explicit load-versus-generation timing, per-model retry, and comparison forking when inputs change.
+5. **Evaluation layer:** preference/verdict capture, annotations, tags, search/filtering, and Markdown/JSON export with full run metadata.
+6. **Model lifecycle:** pinned/recent library views, update availability without auto-upgrade, cache storage controls, disk planning, and clearer runtime installation guidance.
 
 ## Compatibility and migration
 
@@ -151,5 +157,6 @@ Saved lineups, shared generation controls, run-level load timing, retry-one-mode
 - Selecting a comparison in history opens Compare, not Chat.
 - A restored comparison shows its prior shared prompts and per-model responses in the correct columns.
 - Continuing a restored comparison sends each model its own prior assistant history.
+- A live-data prompt can produce a model-attributed tool call and result before the final answer, and the trace is restored with the comparison.
 - Existing chat sessions still open and retain their messages.
 - Backend tests, frontend build, and targeted lint checks pass.

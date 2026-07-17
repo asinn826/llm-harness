@@ -25,7 +25,7 @@ export function UpdateBadge({ kind, title, onClick }: UpdateBadgeProps) {
         display: "inline-flex",
         alignItems: "center",
         gap: 4,
-        fontSize: 10,
+        fontSize: 12,
         padding: "2px 7px",
         borderRadius: 10,
         background: "rgba(80, 136, 247, 0.15)",

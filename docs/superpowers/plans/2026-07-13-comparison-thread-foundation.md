@@ -42,7 +42,7 @@
 - [x] Add a handler test proving a failed model load is persisted as a model-attributed assistant outcome.
 - [x] Persist project and ordered lineup before execution begins.
 - [x] Build each model's conversation from shared user turns and only that model's prior assistant responses.
-- [x] Run comparisons with a shared tool-free system prompt and preserve each model's selected backend.
+- [x] Initially ran comparisons with a shared tool-free prompt; superseded on 2026-07-17 by the shared tool-enabled loop. Preserve each model's selected backend.
 - [x] Persist load failures, generation failures, and empty outputs.
 - [x] Include `session_id` in all terminal comparison messages.
 

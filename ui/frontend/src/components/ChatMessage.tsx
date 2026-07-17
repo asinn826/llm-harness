@@ -56,7 +56,7 @@ export function ChatMessage({
   if (role === "user") {
     return (
       <div className="px-5 py-3">
-        <div className="text-[10px] text-[var(--text-muted)] mb-1 font-medium uppercase tracking-wider">
+        <div className="text-xs text-[var(--text-muted)] mb-1 font-medium">
           You
         </div>
         <div className="text-[var(--text-primary)] text-sm leading-relaxed">
@@ -75,12 +75,12 @@ export function ChatMessage({
     <div className="px-5 py-3">
       <div className="flex items-center gap-1.5 mb-1">
         <div className="w-1.5 h-1.5 rounded-full" style={{ background: modelColor }} />
-        <span className="text-[10px] text-[var(--text-muted)] font-medium uppercase tracking-wider">
+        <span className="text-xs text-[var(--text-muted)] font-medium">
           {modelDisplay}
         </span>
         {tokensGenerated != null && generationTimeMs != null &&
           (tokensGenerated > 0 || generationTimeMs > 0) && (
-          <span className="text-[10px] text-[var(--text-muted)] ml-auto">
+          <span className="text-xs text-[var(--text-muted)] ml-auto">
             {(generationTimeMs / 1000).toFixed(1)}s · {tokensGenerated} tok
           </span>
           )}
@@ -203,13 +203,13 @@ function ToolResultMessage({
         {/* Content */}
         {expanded && (
           <div className="px-3 pb-2 border-t border-[var(--border-subtle)]">
-            <pre className="whitespace-pre-wrap text-[var(--text-secondary)] text-[11px] leading-relaxed mt-2 overflow-x-auto">
+            <pre className="whitespace-pre-wrap text-[var(--text-secondary)] text-xs leading-relaxed mt-2 overflow-x-auto">
               {displayContent}
             </pre>
             {isLong && !expanded && (
               <button
                 onClick={() => setExpanded(true)}
-                className="text-[var(--accent)] text-[10px] mt-1 hover:underline"
+                className="text-[var(--accent)] text-xs mt-1 hover:underline"
               >
                 Show all ({content.length} chars)
               </button>
@@ -268,18 +268,18 @@ export function ToolCallApproval({
           <button
             ref={approveRef}
             onClick={onApprove}
-            className="px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] transition-colors duration-[var(--duration-fast)]"
+            className="px-3 py-1.5 text-sm font-medium rounded-md bg-[var(--accent)] text-white hover:bg-[var(--accent-hover)] transition-colors duration-[var(--duration-fast)]"
           >
             Approve
           </button>
           <button
             onClick={onDeny}
-            className="px-3 py-1.5 text-xs font-medium rounded-md bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:bg-[var(--bg-surface)] transition-colors duration-[var(--duration-fast)]"
+            className="px-3 py-1.5 text-sm font-medium rounded-md bg-[var(--bg-elevated)] text-[var(--text-secondary)] hover:bg-[var(--bg-surface)] transition-colors duration-[var(--duration-fast)]"
           >
             Deny
           </button>
-          <span className="text-[10px] text-[var(--text-muted)] ml-1">
-            press Enter to approve
+          <span className="text-xs text-[var(--text-muted)] ml-1">
+            Enter to approve
           </span>
         </div>
       </div>

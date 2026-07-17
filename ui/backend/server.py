@@ -38,12 +38,6 @@ _TRUSTED_ORIGINS = frozenset({
     "https://tauri.localhost",
 })
 
-_COMPARISON_SYSTEM_PROMPT = (
-    "You are participating in a side-by-side model evaluation. "
-    "Answer the user's request directly and independently. "
-    "Do not call tools or refer to the evaluation harness."
-)
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=sorted(_TRUSTED_ORIGINS),
@@ -1055,10 +1049,13 @@ async def ws_compare(ws: WebSocket):
 
     Client sends:
         {"type": "message", "content": "...", "models": [{"model_id": "...", "backend": "hf"}], "session_id": "..."}
+        {"type": "tool_response", "approved": true/false/"feedback string"}
 
     Server sends (per model):
         {"type": "model_start", "model_id": "...", "index": 0}
         {"type": "token", "data": "...", "model_id": "...", "index": 0}
+        {"type": "tool_call", "tool": "...", "args": {...}, "needs_confirmation": false, "model_id": "...", "index": 0}
+        {"type": "tool_result", "tool": "...", "result": "...", "model_id": "...", "index": 0}
         {"type": "model_done", "model_id": "...", "index": 0, "response": "...", "tokens": N, "time_ms": N}
         {"type": "compare_done", "session_id": "..."}
     """
@@ -1083,8 +1080,11 @@ async def ws_compare(ws: WebSocket):
 
 
 async def _handle_compare_message(ws: WebSocket, msg: dict):
-    """Run one turn against a comparison's stable, ordered model lineup."""
+    """Run one tool-enabled turn against each model in a stable lineup."""
     import threading
+    from .model_manager import parse_tool_call
+    from tools import TOOLS
+    from harness import _trim_stale_tool_results
 
     content = msg["content"]
     raw_models = msg.get("models", [])
@@ -1154,7 +1154,7 @@ async def _handle_compare_message(ws: WebSocket, msg: dict):
     add_message(session_id, "user", content)
 
     def _conversation_for_model(model_id: str) -> list[dict]:
-        """Return shared user turns plus only this model's prior responses."""
+        """Return shared user turns plus this model's responses and tool trace."""
         conversation = []
         failure_prefixes = (
             "Error loading model:",
@@ -1167,10 +1167,11 @@ async def _handle_compare_message(ws: WebSocket, msg: dict):
             elif (
                 message["role"] == "assistant"
                 and message["model_id"] == model_id
-                and not message["tool_name"]
                 and not message["content"].startswith(failure_prefixes)
             ):
                 conversation.append({"role": "assistant", "content": message["content"]})
+            elif message["role"] == "tool" and message["model_id"] == model_id:
+                conversation.append({"role": "tool", "content": message["content"]})
         return conversation
 
     for idx, model_id in enumerate(model_ids):
@@ -1211,70 +1212,219 @@ async def _handle_compare_message(ws: WebSocket, msg: dict):
             continue
 
         conversation = _conversation_for_model(model_id)
-        chunks = []
-        error_box = []
-        start_time = time.time()
+        total_tokens = 0
+        total_generation_ms = 0
+        max_iterations = 10
 
-        loop = asyncio.get_event_loop()
-        token_queue = asyncio.Queue()
+        for iteration in range(max_iterations):
+            _trim_stale_tool_results(conversation)
 
-        def _generate_thread(mgr=model_manager, conv=conversation,
-                             q=token_queue, c=chunks, errors=error_box, lp=loop):
-            try:
-                for token in mgr.generate(conv, system_prompt=_COMPARISON_SYSTEM_PROMPT):
-                    c.append(token)
-                    asyncio.run_coroutine_threadsafe(q.put(token), lp)
-            except Exception as e:
-                errors.append(e)
-            finally:
-                asyncio.run_coroutine_threadsafe(q.put(None), lp)
+            remaining = max_iterations - iteration
+            if remaining == 3:
+                conversation.append({
+                    "role": "user",
+                    "content": (
+                        "[System: You have 3 tool calls remaining. Wrap up with whatever "
+                        "information you have. Do NOT keep searching — summarize what you "
+                        "found and answer the question.]"
+                    ),
+                })
+            elif remaining == 1:
+                conversation.append({
+                    "role": "user",
+                    "content": (
+                        "[System: This is your LAST tool call. You MUST respond with a final "
+                        "answer now, not another tool call.]"
+                    ),
+                })
 
-        async def _stream(q=token_queue, mid=model_id, i=idx):
+            chunks: list[str] = []
+            error_box: list[Exception] = []
+            start_time = time.time()
+            loop = asyncio.get_event_loop()
+            token_queue: asyncio.Queue[str | None] = asyncio.Queue()
+
+            def _generate_thread(mgr=model_manager, conv=conversation,
+                                 q=token_queue, c=chunks, errors=error_box, lp=loop):
+                try:
+                    # Deliberately use the manager's default prompt here. It is
+                    # the same tool registry and calling contract used by chat.
+                    for token in mgr.generate(conv):
+                        c.append(token)
+                        asyncio.run_coroutine_threadsafe(q.put(token), lp)
+                except Exception as e:
+                    errors.append(e)
+                finally:
+                    asyncio.run_coroutine_threadsafe(q.put(None), lp)
+
+            gen_thread = threading.Thread(target=_generate_thread, daemon=True)
+            gen_thread.start()
             while True:
-                token = await q.get()
+                token = await token_queue.get()
                 if token is None:
                     break
                 await ws.send_json({
                     "type": "token",
                     "session_id": session_id,
                     "data": token,
-                    "model_id": mid,
-                    "index": i,
+                    "model_id": model_id,
+                    "index": idx,
                 })
+            gen_thread.join(timeout=10)
 
-        gen_thread = threading.Thread(target=_generate_thread, daemon=True)
-        gen_thread.start()
-        await _stream()
-        gen_thread.join(timeout=10)
+            elapsed_ms = int((time.time() - start_time) * 1000)
+            response = _strip_think_tags(''.join(chunks).strip())
+            token_count = len(chunks)
+            total_generation_ms += elapsed_ms
+            total_tokens += token_count
 
-        elapsed_ms = int((time.time() - start_time) * 1000)
-        response = _strip_think_tags(''.join(chunks).strip())
-        token_count = len(chunks)
+            if error_box:
+                response = f"Error generating response: {error_box[0]}"
+                total_tokens -= token_count
+            elif not response:
+                response = "Model returned empty response"
+                total_tokens -= token_count
 
-        if error_box:
-            response = f"Error generating response: {error_box[0]}"
-            token_count = 0
-        elif not response:
-            response = "Model returned empty response"
-            token_count = 0
+            if error_box or not response or response == "Model returned empty response":
+                add_message(
+                    session_id,
+                    "assistant",
+                    response,
+                    model_id=model_id,
+                    tokens_generated=total_tokens,
+                    generation_time_ms=total_generation_ms,
+                )
+                await ws.send_json({
+                    "type": "model_done",
+                    "session_id": session_id,
+                    "model_id": model_id,
+                    "index": idx,
+                    "response": response,
+                    "tokens": total_tokens,
+                    "time_ms": total_generation_ms,
+                })
+                break
 
-        add_message(
-            session_id,
-            "assistant",
-            response,
-            model_id=model_id,
-            tokens_generated=token_count,
-            generation_time_ms=elapsed_ms,
-        )
-        await ws.send_json({
-            "type": "model_done",
-            "session_id": session_id,
-            "model_id": model_id,
-            "index": idx,
-            "response": response,
-            "tokens": token_count,
-            "time_ms": elapsed_ms,
-        })
+            tool_call = parse_tool_call(response)
+            if tool_call is None:
+                conversation.append({"role": "assistant", "content": response})
+                add_message(
+                    session_id,
+                    "assistant",
+                    response,
+                    model_id=model_id,
+                    tokens_generated=total_tokens,
+                    generation_time_ms=total_generation_ms,
+                )
+                await ws.send_json({
+                    "type": "model_done",
+                    "session_id": session_id,
+                    "model_id": model_id,
+                    "index": idx,
+                    "response": response,
+                    "tokens": total_tokens,
+                    "time_ms": total_generation_ms,
+                })
+                break
+
+            tool_name = tool_call.get("tool", "")
+            args = {
+                key: value
+                for key, value in tool_call.get("args", {}).items()
+                if value is not None
+            }
+            needs_confirmation = (
+                tool_name in TOOLS
+                and getattr(TOOLS[tool_name], "needs_confirmation", True)
+            )
+
+            conversation.append({"role": "assistant", "content": response})
+            add_message(
+                session_id,
+                "assistant",
+                response,
+                model_id=model_id,
+                tool_name=tool_name,
+                tool_args=args,
+                tokens_generated=token_count,
+                generation_time_ms=elapsed_ms,
+            )
+            await ws.send_json({
+                "type": "tool_call",
+                "session_id": session_id,
+                "model_id": model_id,
+                "index": idx,
+                "tool": tool_name,
+                "args": args,
+                "needs_confirmation": needs_confirmation,
+            })
+
+            if needs_confirmation:
+                try:
+                    raw = await asyncio.wait_for(ws.receive_text(), timeout=300)
+                    client_msg = json.loads(raw)
+                    approved = (
+                        client_msg.get("approved", False)
+                        if client_msg.get("type") == "tool_response"
+                        else False
+                    )
+                except (asyncio.TimeoutError, WebSocketDisconnect):
+                    approved = False
+            else:
+                approved = True
+
+            if tool_name not in TOOLS:
+                result = f"Error: unknown tool '{tool_name}'"
+            elif isinstance(approved, str):
+                result = (
+                    "User feedback (do NOT run the tool — adjust and try again): "
+                    f"{approved}"
+                )
+            elif not approved:
+                result = "Tool call denied by user."
+            else:
+                try:
+                    result = str(await asyncio.to_thread(TOOLS[tool_name], **args))
+                except Exception as e:
+                    result = f"Error running tool: {e}"
+
+            await ws.send_json({
+                "type": "tool_result",
+                "session_id": session_id,
+                "model_id": model_id,
+                "index": idx,
+                "result": result,
+                "tool": tool_name,
+                "args": args,
+            })
+            conversation.append({"role": "tool", "content": result})
+            add_message(
+                session_id,
+                "tool",
+                result,
+                model_id=model_id,
+                tool_name=tool_name,
+                tool_args=args,
+            )
+        else:
+            fallback = "Reached maximum tool call iterations."
+            add_message(
+                session_id,
+                "assistant",
+                fallback,
+                model_id=model_id,
+                tokens_generated=total_tokens,
+                generation_time_ms=total_generation_ms,
+            )
+            await ws.send_json({
+                "type": "model_done",
+                "session_id": session_id,
+                "model_id": model_id,
+                "index": idx,
+                "response": fallback,
+                "tokens": total_tokens,
+                "time_ms": total_generation_ms,
+            })
 
     await ws.send_json({"type": "compare_done", "session_id": session_id})
 

@@ -77,7 +77,7 @@ const btnPrimary: React.CSSProperties = {
   border: "none",
   borderRadius: 4,
   color: "white",
-  fontSize: 11,
+  fontSize: 14,
   fontWeight: 500,
   cursor: "pointer",
   flexShrink: 0,
@@ -89,7 +89,7 @@ const btnSecondary: React.CSSProperties = {
   border: "1px solid var(--border-default)",
   borderRadius: 4,
   color: "var(--text-secondary)",
-  fontSize: 11,
+  fontSize: 14,
   cursor: "pointer",
   flexShrink: 0,
 };

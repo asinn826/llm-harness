@@ -9,17 +9,18 @@ Tauri desktop shell
 └── React + TypeScript
     ├── Projects and comparison history
     ├── Hub discovery and preflight
-    └── Aligned multi-model transcripts
+    └── Aligned answers and per-model tool traces
         ↕ trusted local REST/WebSockets
 FastAPI sidecar
 ├── Hub preflight and pinned installer
 ├── Sequential MLX / Transformers runtime manager
+├── Shared tool registry and iterative execution loop
 └── SQLite projects, lineups, turns, and outcomes
 ```
 
-The comparison executor intentionally loads one model at a time. This fits local accelerator constraints while keeping the prompt, supported generation behavior, ordered lineup, and conversation history stable across models.
+The comparison executor intentionally loads one model at a time. This fits local accelerator constraints while keeping the prompt, tool registry, execution rules, ordered lineup, and conversation history stable across models.
 
-Legacy tool-enabled chat remains readable, but `harness.py` and `tools.py` are no longer the desktop product's organizing layer.
+Each model runs the same bounded tool loop. Read-only tools execute automatically; mutating tools pause for approval in that model's pane. Calls, arguments, results, and final answers are persisted with the model outcome. Hidden chain-of-thought text remains suppressed.
 
 ## Development
 
@@ -80,7 +81,7 @@ The packaged macOS app uses MLX. The curated starter catalog therefore points to
 | `GET/PATCH/DELETE` | `/sessions/{id}` | Read, rename, or delete a session |
 | `GET` | `/sessions/{id}/messages` | Restore durable turns and outcomes |
 | `POST` | `/sessions/{id}/fork` | Preserve history while branching an experiment |
-| `WS` | `/ws/compare` | Run a shared prompt sequentially across a pinned ordered lineup |
+| `WS` | `/ws/compare` | Run a shared prompt and tool loop sequentially across a pinned ordered lineup |
 
 New comparison lineups must provide a full immutable Hugging Face commit SHA for every model. Existing unpinned legacy sessions remain readable through a constrained migration path.
 

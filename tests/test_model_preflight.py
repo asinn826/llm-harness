@@ -227,6 +227,152 @@ def test_incompatible_repositories_are_blocked(info, expected_code):
     assert result["can_load"] is False
 
 
+def test_hf_any_to_any_model_with_text_input_is_accepted():
+    api = MagicMock()
+    api.model_info.return_value = _info(
+        pipeline_tag="any-to-any",
+        tags=["any-to-any", "transformers", "safetensors"],
+        config={
+            "architectures": ["Gemma4ForConditionalGeneration"],
+            "model_type": "gemma4",
+            "text_config": {"model_type": "gemma4_text"},
+        },
+    )
+
+    result = preflight_model(
+        "google/gemma-4-E4B-it",
+        backend="hf",
+        available_memory_bytes=32 * GIB,
+        api=api,
+        token="test-token",
+        runtime_probe=lambda _backend: (True, "available", None),
+    )
+
+    assert result["compatible"] is True
+    assert result["compatibility_code"] == "compatible"
+    assert result["can_load"] is True
+    assert result["error"] is None
+
+
+@pytest.mark.parametrize(
+    "pipeline_tag",
+    ["text-generation", "image-text-to-text"],
+)
+def test_mlx_qwen35_text_loader_accepts_hub_task_variants(
+    monkeypatch, pipeline_tag
+):
+    monkeypatch.setattr(
+        "ui.backend.model_preflight._module_available",
+        lambda module: module == "mlx_lm.models.qwen3_5",
+    )
+    api = MagicMock()
+    api.model_info.return_value = _info(
+        pipeline_tag=pipeline_tag,
+        tags=["mlx", pipeline_tag, "safetensors"],
+        config={
+            "architectures": ["Qwen3_5ForConditionalGeneration"],
+            "model_type": "qwen3_5",
+        },
+    )
+
+    result = preflight_model(
+        "mlx-community/Qwen3.5-9B-MLX-4bit",
+        backend="mlx",
+        available_memory_bytes=16 * GIB,
+        api=api,
+        token="test-token",
+        runtime_probe=lambda _backend: (True, "available", None),
+    )
+
+    assert result["compatible"] is True
+    assert result["compatibility_code"] == "compatible"
+    assert result["can_load"] is True
+    assert result["error"] is None
+
+
+def test_unrelated_mlx_vision_model_remains_blocked(monkeypatch):
+    monkeypatch.setattr(
+        "ui.backend.model_preflight._module_available",
+        lambda _module: True,
+    )
+    api = MagicMock()
+    api.model_info.return_value = _info(
+        pipeline_tag="image-text-to-text",
+        tags=["mlx", "image-text-to-text", "safetensors"],
+        config={
+            "architectures": ["LlavaForConditionalGeneration"],
+            "model_type": "llava",
+        },
+    )
+
+    result = preflight_model(
+        "mlx-community/vision-model",
+        backend="mlx",
+        available_memory_bytes=16 * GIB,
+        api=api,
+        token="test-token",
+        runtime_probe=lambda _backend: (True, "available", None),
+    )
+
+    assert result["compatibility_code"] == "unsupported_task"
+    assert result["can_load"] is False
+
+
+def test_qwen35_conditional_architecture_uses_registered_hf_causal_loader():
+    api = MagicMock()
+    api.model_info.return_value = _info(
+        config={
+            "architectures": ["Qwen3_5ForConditionalGeneration"],
+            "model_type": "qwen3_5",
+        },
+    )
+
+    result = preflight_model(
+        "Qwen/Qwen3.5-9B",
+        backend="hf",
+        available_memory_bytes=16 * GIB,
+        api=api,
+        token="test-token",
+        runtime_probe=lambda _backend: (True, "available", None),
+    )
+
+    assert result["compatible"] is True
+    assert result["compatibility_code"] == "compatible"
+    assert result["can_load"] is True
+    assert result["error"] is None
+
+
+def test_mlx_qwen35_requires_runtime_model_support(monkeypatch):
+    monkeypatch.setattr(
+        "ui.backend.model_preflight._module_available",
+        lambda _module: False,
+    )
+    api = MagicMock()
+    api.model_info.return_value = _info(
+        pipeline_tag="image-text-to-text",
+        tags=["mlx", "image-text-to-text", "safetensors"],
+        config={
+            "architectures": ["Qwen3_5ForConditionalGeneration"],
+            "model_type": "qwen3_5",
+        },
+    )
+
+    result = preflight_model(
+        "mlx-community/Qwen3.5-9B-MLX-4bit",
+        backend="mlx",
+        available_memory_bytes=16 * GIB,
+        api=api,
+        token="test-token",
+        runtime_probe=lambda _backend: (True, "available", None),
+    )
+
+    assert result["compatibility_code"] == "runtime_unsupported_model_type"
+    assert result["can_load"] is False
+    assert result["error"]["message"] == (
+        "Update mlx-lm to 0.30.7 or newer to use Qwen3.5 models."
+    )
+
+
 def test_preflight_blocks_custom_remote_code():
     api = MagicMock()
     api.model_info.return_value = _info(
